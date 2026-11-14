@@ -1,0 +1,41 @@
+name: "Bug report"
+description: "Report incorrect behavior or a failing workflow"
+title: "bug: "
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: What went wrong?
+      placeholder: "The consensus calculation counts INFO in the denominator."
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run ...
+        2. Provide ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior / error output
+      description: "Remove tokens, personal data, and full dataset records before pasting logs."
+    validations:
+      required: false
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: "Windows 11, Python 3.11, local / Colab"
+    validations:
+      required: false
