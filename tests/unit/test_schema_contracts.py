@@ -21,8 +21,8 @@ from asshole_ai_detector.schemas.annotation import (
     Verdict,
 )
 from asshole_ai_detector.schemas.case import (
-    AITAComment,
     AITACase,
+    AITAComment,
     DerivedFields,
     VerdictDistribution,
 )
@@ -42,12 +42,11 @@ from asshole_ai_detector.schemas.tools import (
     GroundedPerspective,
     NeutralizeNarrativeInput,
     NeutralizeNarrativeOutput,
-    RetrievedCaseEvidence,
     RetrievalParameters,
+    RetrievedCaseEvidence,
     RetrieveSimilarCasesInput,
     RetrieveSimilarCasesOutput,
 )
-
 
 # ---------------------------------------------------------------------------
 # Small, reusable VALID fixtures. Each helper returns its real Pydantic type.

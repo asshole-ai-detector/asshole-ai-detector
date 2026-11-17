@@ -6,23 +6,23 @@ The agent/workflow controller is responsible for calling them in the right order
 
 from datetime import datetime
 from math import isclose, log
-from typing import Literal, Self, TypeAlias
+from typing import Literal, Self
 
 from pydantic import Field, HttpUrl, model_validator
 
 from .annotation import ClassifierLabel, ContractModel, UncertaintyStatus, Verdict
 from .case import (
+    VERDICTS,
     AITAComment,
     DerivedFields,
     Probability,
     VerdictDistribution,
-    VERDICTS,
 )
 
 CLASSIFIER_LABELS: tuple[ClassifierLabel, ...] = (
     "NTA", "YTA", "ESH", "NAH", "INFO"
 )
-ClassifierProbabilities: TypeAlias = dict[ClassifierLabel, Probability]
+type ClassifierProbabilities = dict[ClassifierLabel, Probability]
 
 
 # 1. classify_verdict ----------------------------------------------------------

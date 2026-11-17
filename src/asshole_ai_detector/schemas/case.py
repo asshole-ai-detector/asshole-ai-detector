@@ -3,16 +3,17 @@
 from collections import Counter
 from datetime import datetime
 from math import isclose
-from typing import Annotated, Literal, Self, TypeAlias
+from typing import Annotated, Literal, Self
 
 from pydantic import Field, HttpUrl, model_validator
 
 from .annotation import ContractModel, Verdict
 
 VERDICTS: tuple[Verdict, ...] = ("NTA", "YTA", "ESH", "NAH")
-Probability: TypeAlias = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
-VerdictDistribution: TypeAlias = dict[Verdict, Probability]
-ConsensusLabel: TypeAlias = Verdict | Literal["DISPUTED"]
+
+type Probability = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
+type VerdictDistribution = dict[Verdict, Probability]
+type ConsensusLabel = Verdict | Literal["DISPUTED"]
 
 
 class AITAComment(ContractModel):
