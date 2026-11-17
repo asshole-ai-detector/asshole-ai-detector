@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.11
+
+      - name: Install project dependencies
+        run: uv sync --frozen
+
+      - name: Lint
+        run: uv run --frozen ruff check .
+
+      - name: Test (when tests exist)
+        run: |
+          if find tests -type f -name 'test_*.py' -print -quit | grep -q .; then
+            uv run --frozen pytest -q
+          else
+            echo "No tests collected yet; add tests as features are implemented."
+          fi
+
+# Intentionally no GPU/model download and no full data processing in CI.
+# As heavier ML dependencies are added, consider a lighter CI dependency group.

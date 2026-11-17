@@ -1,0 +1,63 @@
+# Shared, NON-SECRET implementation defaults derived from Milestone 2.
+# Development-tuned thresholds must remain unset until validated and frozen.
+
+project:
+  seed: 42  # proposed reproducibility seed; confirm/freeze in ARCH-02
+
+preprocessing:
+  min_post_words: 50
+  min_valid_verdict_comments: 5
+  max_ranked_comments: 10
+  consensus_threshold: 0.70
+  valid_verdicts: [NTA, YTA, ESH, NAH]
+  clarification_label: INFO
+
+splits:
+  golden_targets:
+    NTA: 40
+    YTA: 40
+    ESH: 40
+    NAH: 40
+    disputed: 20
+    missing_context: 20
+  dev_size: null  # confirm in ARCH-02
+  enforce_no_overlap: true
+  near_duplicate_cosine_threshold: 0.95  # initial value, to validate
+
+rag:
+  embedding_model: Qwen/Qwen3-Embedding-0.6B
+  reranker_model: Qwen/Qwen3-Reranker-0.6B
+  embedding_dimensions: 1024
+  index_max_posts: 20000
+  max_per_top_verdict: 5000
+  embedded_post_token_limit: 1024
+  embedded_post_head_tokens: 700
+  embedded_post_tail_tokens: 324
+  dense_top_k: 30
+  rerank_top_k: 15
+  evidence_cases: 5
+  comments_per_case: 3
+  comment_word_limit: 60
+  rerank_retry_threshold: 0.5  # initial dev-tuned threshold
+  disagreement_threshold: null  # dev-tuned; do not guess
+
+classifier:
+  model_family: roberta-base
+  labels: [NTA, YTA, ESH, NAH, INFO]
+  t_info: null  # dev-tuned
+
+agent:
+  max_clarification_questions: 3
+  max_clarification_rounds: 1
+  max_llm_calls_without_clarification: 4
+  max_explanation_revisions: 1
+  uncertainty_priority: [withhold, split, leaning, confident]
+  m_low: null   # dev-tuned
+  m_high: null  # dev-tuned
+
+llm:
+  initial_default_model: Qwen/Qwen3-4B-Instruct-2507
+  end_to_end_latency_target_seconds: 30  # target, not a guarantee
+
+# Model revision pins and frozen thresholds belong in the recorded experiment
+# configuration and index manifest before running final Golden evaluation.

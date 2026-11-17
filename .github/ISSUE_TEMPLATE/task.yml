@@ -1,0 +1,58 @@
+name: "Implementation task"
+description: "A development, architecture, data, or evaluation task"
+title: ""
+body:
+  - type: textarea
+    id: context
+    attributes:
+      label: Goal / context
+      description: "Why is this needed? Reference the milestone section where helpful."
+      placeholder: "Implement consensus labeling described in Section 3.2."
+    validations:
+      required: true
+  - type: textarea
+    id: requirements
+    attributes:
+      label: Requirements
+      description: "Specify behavior, inputs, outputs and constraints."
+      placeholder: |
+        - Normalize verdict votes.
+        - Apply the 70% consensus rule.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: "A checklist that determines when this issue is done."
+      value: |
+        - [ ] Implementation matches the agreed design
+        - [ ] Relevant tests added or updated
+        - [ ] Documentation updated if needed
+        - [ ] Reviewed PR merged
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies / related issues
+      placeholder: "Blocked by #5; related to #3"
+    validations:
+      required: false
+  - type: textarea
+    id: testing
+    attributes:
+      label: Test / verification plan
+      placeholder: "pytest unit tests with valid/invalid vote counts and ties."
+    validations:
+      required: false
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority (also set the Project board priority field)
+      options:
+        - High
+        - Medium
+        - Low
+    validations:
+      required: true
