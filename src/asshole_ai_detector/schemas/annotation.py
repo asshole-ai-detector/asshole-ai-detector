@@ -9,7 +9,6 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # INFO signals a need for clarification; it is never a final moral verdict.
-# INFO signals a need for clarification; it is never a final moral verdict.
 type Verdict = Literal["NTA", "YTA", "ESH", "NAH"]
 type ClassifierLabel = Verdict | Literal["INFO"]
 type UncertaintyStatus = Literal["withhold", "split", "leaning", "confident"]

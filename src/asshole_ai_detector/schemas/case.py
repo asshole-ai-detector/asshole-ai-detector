@@ -124,3 +124,53 @@ class AITACase(ContractModel):
             ):
                 raise ValueError(f"Incorrect verdict distribution for {verdict}")
         return self
+    
+
+
+class NormalizedAITAComment(ContractModel):
+    """Intermediate comment record before filtering invalid verdicts.
+
+    Comments may have missing text or unsupported verdict labels.
+    The preprocessing pipeline determines whether they are valid.
+    """
+
+    # One-based position in the original comment ordering.
+    # Preserved for deterministic tie-breaking.
+    rank: int = Field(ge=1)
+
+    # Raw verdict label; may be INFO, missing, or unsupported.
+    verdict: str | None = None
+
+    # Missing or deleted comment text is handled during filtering.
+    text: str | None = None
+
+
+class NormalizedAITACase(ContractModel):
+    """Intermediate AITA submission before filtering and deriving labels.
+
+    Fields remain optional because source records may be incomplete.
+    Only eligible records are converted into validated AITACase objects.
+    """
+
+    # Source identifier used for deduplication and comment IDs.
+    post_id: str | None = None
+
+    # Original submission content, validated during preprocessing.
+    title: str | None = None
+    text: str | None = None
+
+    # Source metadata; URL validation happens in the final case schema.
+    url: str | None = None
+    date: datetime | None = None
+
+    # Original comments, including those later excluded by filtering.
+    comments: list[NormalizedAITAComment] = Field(default_factory=list)
+
+    # Dataset-provided ambiguity score; diagnostic only.
+    # Not used for filtering or consensus calculations.
+    provider_ambiguity: float | None = Field(
+        default=None,
+        ge=0,
+        le=1,
+        allow_inf_nan=False,
+    )
