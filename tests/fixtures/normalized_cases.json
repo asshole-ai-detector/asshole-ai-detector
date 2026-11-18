@@ -1,0 +1,203 @@
+
+[
+  {
+    "post_id": "mock-consensus-001",
+    "title": "AITA for refusing to clean after my roommates' party?",
+    "text": "I share an apartment with two friends. Last weekend, one roommate asked me to clean the entire kitchen after a party I did not attend. I explained that I had already cleaned my own dishes and had an important deadline the next morning. I offered to help organize a cleaning schedule, but they insisted that I do everything immediately. We argued in our group chat, and now they say I am selfish for refusing.",
+    "url": "https://example.com/aita/mock-consensus-001",
+    "date": "2026-01-10T12:00:00Z",
+    "provider_ambiguity": 0.1,
+    "comments": [
+      {
+        "rank": 1,
+        "verdict": "NTA",
+        "text": "You should not have to clean up their party."
+      },
+      {
+        "rank": 2,
+        "verdict": "NTA",
+        "text": "Your roommates should take responsibility."
+      },
+      {
+        "rank": 3,
+        "verdict": "YTA",
+        "text": "Everyone sharing the apartment should contribute."
+      },
+      {
+        "rank": 4,
+        "verdict": "NTA",
+        "text": "Offering to create a schedule was reasonable."
+      },
+      {
+        "rank": 5,
+        "verdict": "NTA",
+        "text": "You did not attend the party."
+      }
+    ]
+  },
+  {
+    "post_id": "mock-disputed-002",
+    "title": "AITA for confronting my sister at dinner?",
+    "text": "My sister and I planned a family dinner together. I booked the table after she said any restaurant would be fine. Later she complained that I chose a place she disliked and told relatives I had ignored her preferences. I pointed out her earlier message, but she said I should have asked again. During dinner I brought up the messages in front of everyone. She became upset and left early. We both think the other handled the situation badly.",
+    "url": "https://example.com/aita/mock-disputed-002",
+    "date": null,
+    "provider_ambiguity": 0.7,
+    "comments": [
+      {
+        "rank": 1,
+        "verdict": "YTA",
+        "text": "Bringing it up publicly was unnecessary."
+      },
+      {
+        "rank": 2,
+        "verdict": "NTA",
+        "text": "She originally approved your decision."
+      },
+      {
+        "rank": 3,
+        "verdict": "INFO",
+        "text": "Did she mention any dietary restrictions?"
+      },
+      {
+        "rank": 4,
+        "verdict": "NTA",
+        "text": "You followed the plan you agreed on."
+      },
+      {
+        "rank": 5,
+        "verdict": "YTA",
+        "text": "You could have discussed it privately."
+      },
+      {
+        "rank": 6,
+        "verdict": "ESH",
+        "text": "Both of you communicated poorly."
+      }
+    ]
+  },
+  {
+    "post_id": "mock-missing-003",
+    "title": null,
+    "text": "I was asked to take responsibility for supplies at a club event. The organizer told me to buy whatever was necessary, but did not give a budget or explain how reimbursement would work. I paid for several items and later requested repayment. The organizer said some purchases were unnecessary and refused to reimburse me. I do not know whether there was an approved spending limit, and I have not seen the rules that other volunteers were given.",
+    "url": null,
+    "date": null,
+    "provider_ambiguity": null,
+    "comments": [
+      {
+        "rank": 1,
+        "verdict": "NTA",
+        "text": "The organizer should explain the budget."
+      },
+      {
+        "rank": 2,
+        "verdict": "INFO",
+        "text": "Was there a written spending policy?"
+      },
+      {
+        "rank": 3,
+        "verdict": "YTA",
+        "text": "You should have checked before buying."
+      },
+      {
+        "rank": 4,
+        "verdict": "NTA",
+        "text": "The instruction was unclear."
+      },
+      {
+        "rank": 5,
+        "verdict": "ESH",
+        "text": "Both sides should clarify expenses."
+      },
+      {
+        "rank": 6,
+        "verdict": "NTA",
+        "text": "You acted on the organizer's request."
+      }
+    ]
+  },
+  {
+    "post_id": "mock-invalid-comments-004",
+    "title": "AITA for disagreeing with another volunteer?",
+    "text": "Our volunteer team had to prepare a room for a community meeting. I arrived early and started arranging chairs according to the schedule we had received. Another volunteer wanted a different layout and asked me to redo everything. I said we should ask the organizer first, but they moved some chairs while I was working. Later I sent a message explaining what happened. The discussion became heated, and several people posted comments about who should apologize.",
+    "url": "https://example.com/aita/mock-invalid-comments-004",
+    "date": null,
+    "provider_ambiguity": 0.2,
+    "comments": [
+      {
+        "rank": 1,
+        "verdict": "NTA",
+        "text": "You followed the original instructions."
+      },
+      {
+        "rank": 2,
+        "verdict": "INFO",
+        "text": "Did the organizer approve the new layout?"
+      },
+      {
+        "rank": 3,
+        "verdict": "NTA",
+        "text": "You tried to clarify the plan."
+      },
+      {
+        "rank": 4,
+        "verdict": "NTA",
+        "text": "[deleted]"
+      },
+      {
+        "rank": 5,
+        "verdict": "UNKNOWN",
+        "text": "Unsupported verdict label."
+      },
+      {
+        "rank": 6,
+        "verdict": "YTA",
+        "text": "You could have been more flexible."
+      },
+      {
+        "rank": 7,
+        "verdict": "NTA",
+        "text": "Checking with the organizer was sensible."
+      },
+      {
+        "rank": 8,
+        "verdict": "NTA",
+        "text": "You were trying to follow the schedule."
+      },
+      {
+        "rank": 9,
+        "verdict": null,
+        "text": "This comment has no verdict label."
+      },
+      {
+        "rank": 10,
+        "verdict": "NAH",
+        "text": "[removed]"
+      }
+    ]
+  },
+  {
+    "post_id": "mock-short-005",
+    "title": "AITA for saying no?",
+    "text": "I said no to a favor.",
+    "url": "https://example.com/aita/mock-short-005",
+    "date": null,
+    "provider_ambiguity": null,
+    "comments": [
+      {
+        "rank": 1,
+        "verdict": "NTA",
+        "text": "You can refuse a favor."
+      },
+      {
+        "rank": 2,
+        "verdict": "YTA",
+        "text": "There is not enough context."
+      },
+      {
+        "rank": 3,
+        "verdict": null,
+        "text": null
+      }
+    ]
+  }
+]
