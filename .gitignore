@@ -2,7 +2,7 @@
 .venv/
 .env
 .streamlit/secrets.toml
-data/
+/data/
 artifacts/
 __pycache__/
 .pytest_cache/

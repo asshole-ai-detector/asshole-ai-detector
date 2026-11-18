@@ -4,6 +4,14 @@
 project:
   seed: 42  # proposed reproducibility seed; confirm/freeze in ARCH-02
 
+data_sources:
+  aita:
+    hf_dataset: MattBoraske/reddit-AITA-submissions-and-comments-multiclass
+    # Pinned dataset commit (last modified 2024-03-28) for reproducible loading.
+    revision: 84c229ffd926e8efaa1828a5d3803f29231f2d0e
+    # Both provider splits are loaded; our own splits are created later.
+    hf_splits: [train, test]
+
 preprocessing:
   min_post_words: 50
   min_valid_verdict_comments: 5
