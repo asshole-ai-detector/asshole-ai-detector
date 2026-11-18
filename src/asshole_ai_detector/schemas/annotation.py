@@ -85,9 +85,11 @@ class GoldenAnnotation(ContractModel):
             raise ValueError("community_agreement must exclude INFO votes")
 
         if self.case_type == "missing_context":
-            # This category takes precedence even when community agreement >= 70%.
+            # Missing essential context takes precedence over community consensus
             if self.reference_verdict is not None:
                 raise ValueError("missing_context cases must have a null reference verdict")
+            if self.expected_uncertainty_tier != "withhold":
+                raise ValueError("missing_context cases must use the withhold uncertainty tier")
             return self
 
         if self.community_votes.moral_count < 5:

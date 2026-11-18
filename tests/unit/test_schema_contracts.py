@@ -140,12 +140,30 @@ def test_consensus_requires_correct_majority_and_threshold() -> None:
 
 
 def test_missing_context_can_have_high_agreement_but_no_reference() -> None:
-    annotation = sample_golden(case_type="missing_context", reference_verdict=None)
+    annotation = sample_golden(
+        case_type="missing_context",
+        reference_verdict=None,
+        expected_uncertainty_tier="withhold",
+        expected_initial_action="request_clarification",
+    )
+
     assert annotation.community_agreement == 0.8
     assert annotation.reference_verdict is None
-    with pytest.raises(ValidationError, match="null reference"):
-        sample_golden(case_type="missing_context")
+    assert annotation.expected_uncertainty_tier == "withhold"
 
+    with pytest.raises(ValidationError, match="null reference"):
+        sample_golden(
+            case_type="missing_context",
+            expected_uncertainty_tier="withhold",
+        )
+
+def test_missing_context_rejects_confident_uncertainty() -> None:
+    with pytest.raises(ValidationError, match="withhold"):
+        sample_golden(
+            case_type="missing_context",
+            reference_verdict=None,
+            expected_uncertainty_tier="confident",
+        )
 
 def test_annotation_rejects_more_than_ten_source_comments() -> None:
     with pytest.raises(ValidationError, match="at most 10"):
@@ -467,3 +485,17 @@ def test_all_six_tool_json_schemas_are_exportable() -> None:
     )
     for contract in tool_contracts:
         assert "properties" in contract.model_json_schema()
+
+def test_assessment_result_rejects_extra_fields() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="Extra inputs are not permitted",
+    ):
+        AssessmentResult.model_validate(
+            {
+                "verdict": "YTA",
+                "explanation": "The narrator acted unfairly.",
+                "uncertainty_tier": "leaning",
+                "unexpected_field": True,
+            }
+        )

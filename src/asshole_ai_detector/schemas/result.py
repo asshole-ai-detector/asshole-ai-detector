@@ -2,12 +2,12 @@
 
 from typing import Self
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import Field, model_validator
 
-from .annotation import UncertaintyStatus, Verdict
+from .annotation import ContractModel, UncertaintyStatus, Verdict
 
 
-class AssessmentResult(BaseModel):
+class AssessmentResult(ContractModel):
     verdict: Verdict | None
     secondary_verdict: Verdict | None = None
     explanation: str = Field(min_length=1)
