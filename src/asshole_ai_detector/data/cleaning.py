@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any, Self
 
 import yaml
-from pydantic import Field
+from pydantic import Field, HttpUrl, TypeAdapter, ValidationError
 
 from asshole_ai_detector.schemas.annotation import CommunityVotes
 from asshole_ai_detector.schemas.case import (
@@ -78,10 +78,22 @@ class CleaningConfig:
     clarification_label: str = "INFO"
     lowercase: bool = True
 
+    
     def __post_init__(self) -> None:
+        if self.min_post_words < 50:
+            raise ValueError("min_post_words must be at least 50")
+
+        if self.min_valid_verdict_comments < 5:
+            raise ValueError(
+                "min_valid_verdict_comments must be at least 5"
+            )
+
         unknown = set(self.valid_verdicts) - set(VERDICTS)
         if unknown:
-            raise ValueError(f"Unsupported valid verdicts: {sorted(unknown)}")
+            raise ValueError(
+                f"Unsupported valid verdicts: {sorted(unknown)}"
+            )
+
 
     @classmethod
     def from_mapping(cls, preprocessing: Mapping[str, Any]) -> Self:
@@ -188,7 +200,7 @@ _URL = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
 _MENTION = re.compile(r"(?<![\w/])/?[ur]/[A-Za-z0-9_-]+", re.IGNORECASE)
 _HORIZONTAL_SPACE = re.compile(r"[^\S\n]+")
 _EXTRA_NEWLINES = re.compile(r"\n{3,}")
-
+_HTTP_URL_ADAPTER = TypeAdapter(HttpUrl)
 
 def is_deleted(text: str | None) -> bool:
     """True for Reddit placeholders such as ``[deleted]`` or ``[removed]``."""
@@ -251,7 +263,15 @@ def classify_comment(
 
 
 def _is_http_url(url: str | None) -> bool:
-    return bool(url) and url.strip().lower().startswith(("http://", "https://"))
+    """Check whether a URL satisfies the final schema requirements."""
+    if not url or not url.strip():
+        return False
+
+    try:
+        _HTTP_URL_ADAPTER.validate_python(url.strip())
+        return True
+    except ValidationError:
+        return False
 
 
 def clean_case(

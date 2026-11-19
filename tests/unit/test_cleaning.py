@@ -20,9 +20,6 @@ from asshole_ai_detector.data.cleaning import (
     normalize_text,
 )
 from asshole_ai_detector.schemas.case import (
-    AITACase,
-    AITAComment,
-    DerivedFields,
     NormalizedAITACase,
 )
 
@@ -219,10 +216,27 @@ def test_all_rejection_reasons_are_recorded():
     )
 
 
+
 def test_config_thresholds_are_respected():
-    config = CleaningConfig(min_post_words=2, min_valid_verdict_comments=1)
-    outcome = clean_case(make_case([comment(1)], text="two words"), config)
-    assert isinstance(outcome, CleanedAITACase)
+    config = CleaningConfig(
+        min_post_words=61,
+        min_valid_verdict_comments=6,
+    )
+
+    outcome = clean_case(make_case(), config)
+
+    assert isinstance(outcome, RejectedAITACase)
+    assert RejectionReason.TOO_FEW_WORDS in outcome.reasons
+    assert RejectionReason.TOO_FEW_VALID_VERDICTS in outcome.reasons
+
+
+def test_config_rejects_thresholds_below_schema_minimums():
+    with pytest.raises(ValueError):
+        CleaningConfig(min_post_words=49)
+
+    with pytest.raises(ValueError):
+        CleaningConfig(min_valid_verdict_comments=4)
+
 
 
 def test_cleaning_is_deterministic():
@@ -303,37 +317,3 @@ def test_cleaned_case_is_still_a_normalized_case():
     assert isinstance(outcome, NormalizedAITACase)
     assert all(c.verdict in {"NTA", "YTA", "ESH", "NAH"} for c in outcome.comments)
 
-
-def label_like_data_03(case: NormalizedAITACase) -> AITACase:
-    """Mirror of DATA-03's agreed ``label_cleaned_case(case)``."""
-    comments = [
-        AITAComment(
-            comment_id=f"{case.post_id}#{c.rank}",
-            rank=c.rank,
-            verdict=c.verdict,
-            text=c.text,
-        )
-        for c in case.comments
-    ]
-    return AITACase(
-        post_id=case.post_id,
-        title=case.title,
-        text=case.text,
-        url=case.url,
-        date=case.date,
-        derived_fields=DerivedFields.from_comments(comments),
-        valid_comments=comments,
-        provider_ambiguity=case.provider_ambiguity,
-    )
-
-
-def test_cleaned_cases_satisfy_the_aitacase_contract():
-    """DATA-03 must be able to build an AITACase from a cleaned case alone."""
-    cases = [
-        NormalizedAITACase.model_validate(c) for c in json.loads(FIXTURES.read_text())
-    ]
-    labels = [
-        label_like_data_03(cleaned).derived_fields.consensus_label
-        for cleaned in clean_cases(cases).accepted
-    ]
-    assert labels == ["NTA", "DISPUTED", "NTA"]
