@@ -61,3 +61,29 @@ development and index splits are created later.
 - Comment slots where both text and label are missing are skipped. All other comments keep their
   original `rank`, raw label (including `INFO` and null) and text (including `[deleted]`).
 - `ambiguity_score` becomes `provider_ambiguity` (NaN becomes `None`).
+
+## Cleaning and filtering (DATA-02)
+
+`asshole_ai_detector.data.cleaning` turns `NormalizedAITACase` records into `CleanedAITACase` records
+(accepted) or `RejectedAITACase` records (rejected, with every matching reason). Thresholds are read from
+`preprocessing` in `configs/default.yaml`.
+
+| Level | Rule | Status / reason |
+| --- | --- | --- |
+| Comment | Text is `[deleted]` / `[removed]` (wins over any label) | `deleted` |
+| Comment | Label is null or blank | `null_label` |
+| Comment | Label is not NTA/YTA/ESH/NAH/INFO | `unsupported_label` |
+| Comment | No text left after cleaning | `empty_text` |
+| Comment | Label is INFO: dropped from valid comments, counted in `community_votes.INFO` | `info` |
+| Submission | Missing post ID / title / URL (not http(s)) | `missing_post_id`, `missing_title`, `invalid_url` |
+| Submission | Text missing, or `[deleted]` / `[removed]` | `missing_text`, `deleted_text` |
+| Submission | Fewer than 50 words in the cleaned text | `too_few_words` |
+| Submission | Fewer than 5 valid moral verdicts (INFO does not count) | `too_few_valid_verdicts` |
+
+Text cleaning (Section 3.6, step 2): HTML entities decoded, links and `u/` / `r/` mentions removed
+(markdown links keep their text), lowercased, whitespace collapsed with paragraph breaks kept.
+
+A `CleanedAITACase` is still a `NormalizedAITACase`: its `comments` hold only the valid comments, with their
+original rank (ranks can have gaps where comments were dropped), and `community_votes` keeps the INFO count. `clean_cases` returns a `CleaningReport` with accepted/rejected totals,
+counts per rejection reason and counts per comment status. DATA-03 (`label_cleaned_case(case)`) builds the
+`AITAComment`s with `comment_id = post_id#rank` and computes the consensus labels.
