@@ -1,9 +1,9 @@
 """Integration test for the real DATA-02 -> DATA-03 boundary."""
 
 import pytest
-from asshole_ai_detector.data_processing.consensus import label_cleaned_case
-
 from asshole_ai_detector.data.cleaning import CleanedAITACase, clean_case
+
+from asshole_ai_detector.data_processing.consensus import label_cleaned_case
 from asshole_ai_detector.schemas.case import NormalizedAITACase
 
 LONG_TEXT = " ".join(["example"] * 55)
