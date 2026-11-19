@@ -23,13 +23,15 @@ This document closes architectural ambiguities before implementation. It does no
 | AITA Golden Dataset | Manually reviewed, frozen final evaluation (200 examples proposed) | **No** | **No** |
 | AITA retrieval partition | Precedents and verdict distributions for the ChromaDB index | No evaluation tuning using this partition as held-out labels | Yes |
 
-**Established:** AITA source is `MattBoraske/reddit-AITA-submissions-and-comments-multiclass`; community verdicts are reference labels, not objective truth. Golden selection targets 40 NTA, 40 YTA, 40 ESH, 40 NAH, 20 disputed, 20 missing-context cases. A consensus case requires at least five valid moral comments and at least 70% agreement. `INFO` is excluded from moral agreement. `GoldenAnnotation` stores two independent annotations for inter-annotator agreement before adjudication. The dataset adapter added in PR #15 should be reused, not reimplemented.
+**Established:** AITA source is `MattBoraske/reddit-AITA-submissions-and-comments-multiclass`; community verdicts are reference labels, not objective truth. Golden selection targets 40 NTA, 40 YTA, 40 ESH, 40 NAH, 20 disputed, 20 missing-context cases. A consensus case requires at least five valid moral comments and at least 70% agreement. `INFO` is excluded from moral agreement. `GoldenAnnotation` stores two independent annotations for inter-annotator agreement before adjudication. Reuse the established DATA-01 dataset adapter and ARCH-01 Pydantic schemas; do not duplicate their interfaces.
 
 **Proposed split procedure:** (1) normalize and group exact/near-duplicate stories before partitioning; (2) reserve the Golden Dataset and development set with a fixed seed and manifest; (3) exclude their IDs and near-duplicates from retrieval; (4) build the retrieval index from the remaining AITA records; (5) record dataset revision, selected IDs, grouping decisions, seed, and preprocessing version. Never use Golden labels, comments, or rephrasings as runtime evidence. A story's reference label must not be included in its inference prompt. The Golden Dataset must remain untouched until model selection and thresholds are frozen.
 
 **Established RAG preparation:** exclude removed/deleted posts and comments, exclude null/INFO comments from moral consensus, reject posts under 50 words or with fewer than five valid moral comments, retain comment ranks and IDs (`post_id#rank`), and calculate `DerivedFields` from the valid comments. Keep up to 5,000 cases per `top_verdict` (maximum 20,000). `provider_ambiguity` is diagnostic only, not a filtering or scoring target. Initial near-duplicate cosine threshold is 0.95, subject to development validation.
 
-**Open dependency — DATA-02/DATA-03:** PR #14 proposes `label_cleaned_case(case, valid_comments)` while review feedback recommends reading cleaned `case.comments` directly and constructing final `AITAComment` objects in DATA-03. Document the merged implementation after PR #14 is resolved; avoid maintaining two competing comment lists.
+**Open integration dependency — DATA-02/DATA-03 (PRs #17 and #14):** DATA-02 produces `CleanedAITACase`, a subtype of `NormalizedAITACase` with cleaned, filtered `NormalizedAITAComment` objects in `case.comments` and diagnostic `community_votes`. DATA-03 currently expects `label_cleaned_case(case, valid_comments)`, where `valid_comments` is a separate iterable of fully constructed `AITAComment` objects. Thus the two implementations do not yet have a direct handoff.
+
+**Proposed handoff:** `NormalizedAITACase` → `CleanedAITACase` → `AITACase`. DATA-02 owns text normalization, comment/post filtering, and preservation of original ranks. DATA-03 should consume the cleaned case, construct final `AITAComment` objects with `comment_id = f"{post_id}#{rank}"`, and compute `DerivedFields` from the valid moral comments. Add a cross-PR integration test for the full handoff, including nonconsecutive ranks and excluded INFO comments. Resolve optional normalized comment fields with explicit validation or an agreed stricter cleaned-comment type; do not bypass the established schemas. Confirm whether diagnostic `community_votes.INFO` is retained in a preprocessing report or separately persisted, since it is not part of the current `AITACase` contract. This handoff is **proposed, not yet merged**.
 
 ## 3. MCP tools and final output contracts
 
@@ -67,7 +69,9 @@ This document closes architectural ambiguities before implementation. It does no
 
 ## 5. Retrieval and indexing specifications
 
-**Established:** one vector per AITA post, embedded text `title + "\n" + text`, with a 1,024-token safety cap (first 700 + last 324). Comments are stored as payload, not embedded. Use Qwen3-Embedding-0.6B, 1,024-dimensional L2-normalized vectors, cosine similarity, a persistent ChromaDB collection, and Qwen3-Reranker-0.6B. Query instruction prefix and no document prefix follow Milestone 2 Section 3.4.
+**Established:** one vector per AITA post, embedded text `title + "\n" + text`, with a 1,024-token safety cap (first 700 + last 324). Comments are not embedded. Milestone 2 describes complete cases as stored payload; the proposed implementation refinement below separates full case storage from vector metadata. Use Qwen3-Embedding-0.6B, 1,024-dimensional L2-normalized vectors, cosine similarity, a persistent ChromaDB collection, and Qwen3-Reranker-0.6B. Query instruction prefix and no document prefix follow Milestone 2 Section 3.4.
+
+**Proposed case-store separation (pending team agreement):** ChromaDB holds post embeddings and retrieval metadata (`post_id`, `top_verdict`, `consensus_label`), while complete cleaned and labeled AITA cases (post text, URL, date, valid comments, comment IDs, derived fields and diagnostic metadata where retained) live in a persistent case store keyed by `post_id`. The retrieval service resolves candidate IDs against the case store for reranking and evidence construction. Both stores must be versioned consistently; missing case records must produce an explicit integrity error rather than fabricated evidence. The exact case-store format and location remain open. This proposal refines Milestone 2's payload-storage wording and requires team confirmation.
 
 The retrieval pipeline performs dense top-30, reranks top-15, computes a relevance-weighted four-verdict distribution and disputed share from the reranked neighbors, then selects up to five displayed cases using verdict-balanced selection. `retrieval_confidence` is the mean score of the five highest-ranked neighbors (or the available fewer neighbors), **not** the displayed balanced cases. The initial reranker threshold is 0.5; if the best score is below threshold, retry once using a deterministic relationship/trigger/actions query. Treat low or missing retrieval evidence as weak or unavailable, never as agreement.
 
@@ -87,7 +91,20 @@ The retrieval pipeline performs dense top-30, reranks top-15, computes a relevan
 
 **Established comparison configurations:** direct LLM baseline (no tools), RAG-enhanced LLM, and full controlled agent. Use the same held-out stories and comparable prompting/output rules. Select models and tune thresholds on the development set only; freeze the final configuration before a single Golden evaluation. The default SLM remains Qwen3-4B unless a challenger improves YTA sycophancy without reducing verdict accuracy below the baseline and stays near the target median latency of 30 seconds.
 
-**Proposed run matrix:** each SLM candidate × three configurations, with fixed prompt versions and deterministic decoding settings where supported. Record hardware, quantization, seeds, inference settings, token usage, model revisions and per-story latency. If a baseline cannot implement a component, mark it not applicable rather than pretending that every configuration uses identical tools.
+**Established nine-configuration experiment matrix (Milestone 2, Section 4.5):**
+
+| Model | Direct baseline | RAG-enhanced | Agent-based | Number of runs |
+|---|---|---|---|---:|
+| Qwen3-4B-Instruct-2507 | Yes | Yes | Yes | 3 |
+| Gemma 3 4B | Yes | No | Yes | 2 |
+| Llama 3.2 3B | Yes | No | Yes | 2 |
+| Qwen2.5-1.5B-Instruct | Yes | No | No | 1 |
+| API baseline (exact model to be fixed) | Yes | No | No | 1 |
+| **Total** | **5** | **1** | **3** | **9** |
+
+**Additional reference:** evaluate fine-tuned RoBERTa in a **classifier-only** configuration for classification accuracy, macro-F1 and calibration; this is not counted among the nine generative configurations. If time or compute is limited, prioritize the three Qwen3-4B configurations and classifier-only evaluation; optional challenger agent runs and ablations may be reduced, with deviations recorded. Additional experiments are extensions, not part of the original nine.
+
+Use fixed prompt versions and deterministic decoding where supported. Record hardware, quantization, seeds, inference settings, token usage, model revisions and per-story latency. Compare configurations on the same held-out examples with metrics appropriate to their capabilities; do not apply generative explanation metrics to classifier-only runs.
 
 **Metrics and denominators:**
 - **Verdict accuracy / macro-F1:** only Golden `consensus` cases with non-null reference verdicts; report class-level results and confusion matrix.
@@ -98,7 +115,7 @@ The retrieval pipeline performs dense top-30, reranks top-15, computes a relevan
 - **Consistency:** original/neutralized/role-swapped versions of 20 Golden consensus stories (60 inputs), with responsibility mapped back to the original narrator.
 - **Latency:** median and p95 end-to-end time per story; per-tool timings, failures and retries.
 
-**Open:** agree on the exact sycophancy rubric, threshold for acceptable accuracy difference, repeat count, and final API model ID before running the Golden evaluation. A model's sycophancy score must not be computed from Golden labels during selection.
+**Open:** agree on the exact sycophancy rubric, threshold for acceptable accuracy difference, repeat count, and final API model ID (Milestone 2 lists Gemini 3.8 Flash or GPT-4o-mini as candidates; verify availability) before running the Golden evaluation. A model's sycophancy score must not be computed from Golden labels during selection.
 
 ## 7. Configuration and tuning
 
@@ -143,6 +160,8 @@ Streamlit (local)
 
 The remote inference adapter is a **proposal**, not an existing deployed endpoint. Colab notebook sessions are ephemeral and may not expose stable inbound URLs; the team must verify tunnel/network access, authentication, session lifetime, GPU memory, and acceptable latency. Alternative: execute the MCP server and Streamlit in the same Colab environment for a demonstration, or run small quantized models locally. These alternatives should be tested before the final deployment choice.
 
+**Early feasibility validation (open):** Before committing to the proposed remote deployment, run a minimal end-to-end proof of concept: Streamlit/controller → local MCP server → authenticated HTTPS inference adapter → Colab-hosted model → schema-validated response. Measure connectivity, cold-start behavior, session lifetime, authentication, failure/timeout handling and end-to-end latency. Record results and choose a fallback if the remote approach is unreliable. This proof of concept is a follow-up implementation task, not a completed ARCH-02 deliverable.
+
 **Proposed service requirements:** explicit request IDs, model/version fields, authenticated transport, request/response timeouts, bounded retries, no raw scenario logging by default, redacted error messages, and health checks. Return structured errors to the controller; on remote model failure, do not fabricate a verdict. Keep the MCP success payload identical regardless of model location.
 
 ## 9. Storage and artifacts
@@ -156,18 +175,21 @@ configs/
 src/asshole_ai_detector/
   schemas/                           # existing Pydantic contracts
   data/                              # existing source adapters
-  data_processing/                   # cleaning / consensus, PR #14 pending
+  data_processing/                   # consensus (PR #14 under review)
   agent/                             # proposed controller
   mcp_server/                        # proposed MCP adapters
   retrieval/                         # proposed index and search services
 artifacts/                            # generated, normally gitignored
-  chroma/<index-version>/
+  chroma/<index-version>/            # embeddings + retrieval metadata
+  cases/<dataset-version>/           # complete cases, keyed by post_id (proposed)
   models/<model-id>/
   runs/<run-id>/
   annotations/
 docs/
   architecture/technical-specifications.md
 ```
+
+**Proposed case storage:** Keep complete cleaned and labeled AITA cases separately from the ChromaDB vector index, using `post_id` as the lookup key. ChromaDB retains embeddings and retrieval metadata; the case store retains full post text, valid comments, comment IDs and derived consensus statistics. Coordinate case-store and index versions. The exact format (for example JSONL or a keyed database), shared location, and retention policy are not yet agreed.
 
 **Proposed:** keep lightweight manifests, schemas, configs and reproducible scripts in Git; keep large model weights, datasets, vector indexes and private user stories out of Git. Use an artifact store or shared drive with checksums, access control and explicit retention policy. Each run records dataset revision/split IDs, model versions, code commit, config hash, evaluation script version, timestamps, metrics, and failure counts. Do not commit API tokens or user-submitted conflict narratives. If a large index is copied between local and Colab, verify its embedding model revision, dimensions and manifest before use.
 
@@ -180,16 +202,22 @@ docs/
 | One vector per post | Established | Preserves narrative context; can lose detail in very long posts |
 | Qwen3 embedding and reranker | Established in latest Milestone 2 | More capable pipeline but greater compute than MiniLM/BGE alternatives |
 | ChromaDB persistent local index | Established | Simple deployment at current scale; requires artifact syncing across environments |
+| Separate full-case store keyed by `post_id` | Proposed | Keeps vector metadata small; adds a lookup and requires synchronized versions |
+| DATA-02 → DATA-03 cleaned-case handoff | Open | Removes duplicate comment lists; requires agreement and cross-PR integration tests |
+| Nine-configuration experiment matrix | Established in Milestone 2 | Bounded comparison; additional runs and ablations are optional |
 | Local stdio MCP | Established as prototype | Straightforward local orchestration, not a remote transport |
 | Remote Colab inference adapter | Proposed | Preserves local MCP but requires reliable authenticated remote connectivity |
 | Development tuning, Golden only for final evaluation | Established | Reduces leakage, limits ability to revisit choices after final results |
 
 ## 11. Open decisions and integration checklist
 
-- [ ] Confirm the final DATA-02/DATA-03 interface after PR #14 is updated and merged.
+- [ ] Confirm DATA-02/DATA-03 handoff and cross-PR integration tests (PRs #17 and #14); reflect the agreed interface after merge.
+- [x] Align the experiment matrix with the nine configurations in Milestone 2, Section 4.5.
+- [ ] Confirm separate case-store format, `post_id` lookup, and index/case version consistency.
+- [ ] Run the local MCP → authenticated HTTPS → Colab feasibility proof of concept and record fallback.
 - [ ] Verify Scruples-to-five-class label mapping and calibration plan before classifier training.
 - [ ] Define moral-only margin semantics and INFO interaction in uncertainty logic without silently changing `top_two_margin`.
-- [ ] Decide remote Colab connectivity vs co-located demo vs local inference; document fallback and security.
+- [ ] Decide remote Colab connectivity vs co-located demo vs local inference based on feasibility results; document fallback and security.
 - [ ] Define MCP error envelope, timeouts, retry policy and validation tests.
 - [ ] Agree on evaluation rubrics and exact baseline model identifiers.
 - [ ] Tune and freeze numerical thresholds using development data only.
@@ -200,10 +228,10 @@ docs/
 
 - [x] Draft dataset roles, split/leakage rules and reproducibility plan.
 - [x] Map all six MCP tools to existing typed contracts and define the final response contract.
-- [x] Draft model comparison matrix, experiment configurations and metric definitions.
+- [x] Reproduce Milestone 2's exact nine-configuration matrix, classifier-only reference, and metric definitions.
 - [x] Inventory configuration parameters and distinguish established defaults from dev-tuned values.
 - [x] Describe local MCP/Streamlit/Colab communication and explicitly flag unresolved deployment choices.
-- [x] Propose storage layout, manifests and artifact policies.
+- [x] Propose separate case-store and vector-index layout, manifests and artifact policies (pending agreement).
 - [x] Record decisions, alternatives, trade-offs and open questions.
 - [ ] Validate all assumptions against the latest merged code and complete team review.
 - [ ] Resolve or explicitly accept open decisions before marking Issue #4 complete.
