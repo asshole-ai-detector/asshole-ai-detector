@@ -1,10 +1,12 @@
 """Tests for preliminary Golden Dataset candidate selection."""
 
 import json
+from dataclasses import replace
 
 import pytest
 
 from asshole_ai_detector.evaluation.golden_selection import (
+    GoldenSelectionResult,
     export_golden_candidates,
     export_selection_report,
     select_golden_candidates,
@@ -204,3 +206,40 @@ def test_export_creates_parent_directory(tmp_path):
     export_selection_report(result, output)
 
     assert output.exists()
+
+
+@pytest.mark.parametrize("targets", [{}, {"NTA": 0}, {"unknown": 200}])
+def test_malformed_targets_cannot_claim_completion(targets):
+    result = GoldenSelectionResult(target_counts=targets)
+    with pytest.raises(ValueError, match="canonical target"):
+        result.to_report()
+    assert sum(result.shortages.values()) == 200
+
+
+def test_review_nomination_cannot_override_exclusion():
+    case = make_case("nominated", ["NTA"] * 5)
+    with pytest.raises(ValueError, match="overlap"):
+        select_golden_candidates(
+            [case], excluded_ids={"nominated"}, missing_context_review_ids={"nominated"}
+        )
+
+
+def test_selector_rejects_rank_outside_original_slots():
+    case = make_case("oversize", ["YTA"] * 11)
+    with pytest.raises(ValueError, match="top-ten"):
+        select_golden_candidates([case])
+
+
+@pytest.mark.parametrize("share", [float("nan"), float("inf"), True, "0.8", 0.81, 0.2])
+def test_invalid_candidate_statistics_cannot_be_reported(share):
+    result = select_golden_candidates([make_case("one", ["NTA"] * 10)])
+    result.selected[0] = replace(result.selected[0], community_agreement=share)
+    with pytest.raises(ValueError, match="[Aa]greement"):
+        result.to_report()
+
+
+def test_inventory_cannot_undercount_selection():
+    result = select_golden_candidates([make_case("one", ["ESH"] * 5)])
+    result.available_counts["ESH"] = 0
+    with pytest.raises(ValueError, match="available counts"):
+        result.to_report()
