@@ -14,6 +14,7 @@ from types import MappingProxyType
 from typing import Literal
 
 from asshole_ai_detector.data.aita_adapter import MAX_COMMENTS
+from asshole_ai_detector.data.splits import SplitResult
 from asshole_ai_detector.schemas.case import VERDICTS, AITACase
 
 type GoldenCategory = Literal["NTA", "YTA", "ESH", "NAH", "disputed", "missing_context"]
@@ -166,7 +167,7 @@ def validate_source_slots(case: AITACase) -> None:
 
 
 def select_golden_candidates(
-    cases: list[AITACase],
+    cases: list[AITACase] | SplitResult,
     *,
     missing_context_review_ids: set[str] | None = None,
     excluded_ids: set[str] | None = None,
@@ -174,24 +175,42 @@ def select_golden_candidates(
     manifest_id: str | None = None,
     source_revision: str | None = None,
 ) -> GoldenSelectionResult:
-    """Select preliminary candidates from an isolated held-out pool.
+    """Sample preliminary candidates from a trusted DATA-04 SplitResult.
 
-    Preconditions:
-    - DATA-04 has already deduplicated and isolated the pool.
-    - excluded_ids contains any IDs forbidden by the split manifest.
-    - missing_context_review_ids contains human-nominated review candidates,
-      not confirmed missing-context annotations.
-
-    A selected category is provisional until independent human review.
+    The split supplies the entire held-out pool and both provenance fields.
+    Legacy list callers must establish isolation and provenance themselves.
+    Human nominations reserve eligible IDs exclusively for missing-context review.
     """
     excluded = excluded_ids or set()
     review_ids = missing_context_review_ids or set()
 
-    case_ids = [case.post_id for case in cases]
-    if len(case_ids) != len(set(case_ids)):
-        raise ValueError("Duplicate post IDs in held-out candidate pool")
+    manifest = None
+    if isinstance(cases, SplitResult):
+        if manifest_id is not None or source_revision is not None:
+            raise ValueError(
+                "SplitResult supplies its own manifest ID and source revision"
+            )
+        manifest = cases.manifest
+        manifest_id, source_revision = manifest.manifest_id, manifest.source_revision
+        if not all(
+            isinstance(value, str) and value.strip()
+            for value in (manifest_id, source_revision)
+        ):
+            raise ValueError("Missing manifest ID or source revision")
+        cases = cases.golden_candidates
 
-    unknown_review_ids = review_ids - set(case_ids)
+    case_ids = {case.post_id for case in cases}
+    if len(case_ids) != len(cases):
+        raise ValueError("Duplicate post IDs in held-out candidate pool")
+    if manifest is not None:
+        if case_ids != manifest.held_out_ids:
+            raise ValueError("Candidate pool IDs disagree with the held-out partition")
+        if not case_ids.isdisjoint(manifest.development_ids) or not case_ids.isdisjoint(
+            manifest.retrieval_ids
+        ):
+            raise ValueError("Held-out pool overlaps development or retrieval")
+
+    unknown_review_ids = review_ids - case_ids
     if unknown_review_ids:
         raise ValueError(
             "Missing-context review IDs are absent from the candidate pool"
@@ -209,9 +228,17 @@ def select_golden_candidates(
             continue
 
         fields = case.derived_fields
-        agreement = fields.verdict_distribution[fields.top_verdict]
+        # DATA-04 reserves by label before EVAL-01 applies its comment limit.
+        if manifest is not None and not 5 <= fields.n_valid <= MAX_COMMENTS:
+            if case.post_id in review_ids:
+                raise ValueError(
+                    f"Missing-context nominee {case.post_id!r} requires "
+                    f"5–{MAX_COMMENTS} valid moral comments, found {fields.n_valid}"
+                )
+            continue
 
         validate_source_slots(case)
+        agreement = fields.verdict_distribution[fields.top_verdict]
 
         # Human-nominated review cases are held out of all other
         # categories to ensure mutually exclusive assignments.

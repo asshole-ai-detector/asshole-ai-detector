@@ -5,12 +5,19 @@ from dataclasses import replace
 
 import pytest
 
+from asshole_ai_detector.data.deduplication import deduplicate_cases
+from asshole_ai_detector.data.splits import (
+    SplitResult,
+    attach_semantic_scan,
+    split_cases,
+)
 from asshole_ai_detector.evaluation.golden_selection import (
     GoldenSelectionResult,
     export_golden_candidates,
     export_selection_report,
     select_golden_candidates,
 )
+from asshole_ai_detector.evaluation.golden_validation import validate_golden_selection
 from asshole_ai_detector.schemas.case import (
     AITACase,
     AITAComment,
@@ -37,10 +44,148 @@ def make_case(
     return AITACase(
         post_id=post_id,
         title="A sample interpersonal conflict",
-        text=" ".join(["This is a detailed example of a conflict."] * 12),
+        text=f"Synthetic scenario {post_id}. "
+        + "This is a detailed example of a conflict. " * 12,
         url=f"https://www.reddit.com/r/AmItheAsshole/comments/{post_id}/",
         valid_comments=comments,
         derived_fields=DerivedFields.from_comments(comments),
+    )
+
+
+@pytest.fixture
+def split() -> SplitResult:
+    test_cases = [
+        make_case("consensus", ["NTA"] * 7 + ["YTA"] * 3),
+        make_case("nominee", ["NTA"] * 5),
+        make_case("split-vote", ["YTA"] * 3 + ["NTA"] * 2),
+        make_case("too-many", ["ESH"] * 11),
+        make_case("other-test-1", ["YTA"] * 5),
+        make_case("other-test-2", ["YTA"] * 5),
+    ]
+    test_ids = {case.post_id for case in test_cases}
+    corpus = deduplicate_cases(
+        [make_case("train", ["NAH"] * 5), *test_cases], preferred_ids=test_ids
+    )
+    return split_cases(
+        corpus.cases,
+        test_ids=test_ids,
+        source_revision="synthetic-revision",
+        golden_size=4,
+        development_size=1,
+        golden_minimums={"NTA": 2, "DISPUTED": 1, "ESH": 1},
+    )
+
+
+def test_split_selection_uses_held_out_eligibility_and_provenance(split):
+    result = select_golden_candidates(
+        split, missing_context_review_ids={"nominee"}, seed=37
+    )
+
+    assert result.seed == 37
+    assert (result.manifest_id, result.source_revision) == (
+        split.manifest.manifest_id,
+        split.manifest.source_revision,
+    )
+    assert {case.case_id: case.category for case in result.selected} == {
+        "consensus": "NTA",
+        "nominee": "missing_context",
+        "split-vote": "disputed",
+    }
+    assert len(result.selected) == 3
+    assert all(case.requires_manual_review for case in result.selected)
+    assert result.available_counts == result.selected_counts
+    assert result.shortages == {
+        "NTA": 39,
+        "YTA": 40,
+        "ESH": 40,
+        "NAH": 40,
+        "disputed": 19,
+        "missing_context": 19,
+    }
+    assert not result.to_report()["complete"]
+    report = validate_golden_selection(result, manifest=split.manifest)
+    assert report.valid
+    assert "Missing-context candidates require human confirmation" in report.warnings
+    assert "Semantic duplicate scan not verified" in report.warnings
+    assert "Exact duplicate scan not verified" not in report.warnings
+
+
+def test_split_rejects_ineligible_nominee_even_alongside_an_eligible_nominee(split):
+    with pytest.raises(
+        ValueError, match=r"too-many.*5–10 valid moral comments, found 11"
+    ):
+        select_golden_candidates(
+            split, missing_context_review_ids={"nominee", "too-many"}
+        )
+
+
+def test_split_accepts_nominees_at_both_comment_count_limits(split):
+    result = select_golden_candidates(
+        split, missing_context_review_ids={"nominee", "consensus"}
+    )
+    assert {
+        case.case_id: case.n_valid_comments
+        for case in result.selected
+        if case.category == "missing_context"
+    } == {"nominee": 5, "consensus": 10}
+
+
+def test_split_sampling_reproduces_list_selection_with_the_same_seed(split):
+    # Both NTA cases are in the same sampling bucket without a nomination.
+    expected = select_golden_candidates(
+        [case for case in split.golden_candidates if case.post_id != "too-many"],
+        manifest_id=split.manifest.manifest_id,
+        source_revision=split.manifest.source_revision,
+        seed=37,
+    )
+    reordered = replace(split, held_out=list(reversed(split.golden_candidates)))
+    assert select_golden_candidates(split, seed=37) == expected
+    assert select_golden_candidates(reordered, seed=37) == expected
+
+
+@pytest.mark.parametrize("partition", ["development", "retrieval", "unused_test"])
+def test_split_rejects_foreign_candidates_even_before_exclusions(split, partition):
+    foreign = getattr(split, partition)[0]
+    with pytest.raises(ValueError, match="absent"):
+        select_golden_candidates(split, missing_context_review_ids={foreign.post_id})
+    contaminated = replace(split, held_out=[*split.held_out, foreign])
+    with pytest.raises(ValueError, match="held-out partition"):
+        select_golden_candidates(contaminated, excluded_ids={foreign.post_id})
+
+
+def test_split_rejects_truncated_pool(split):
+    with pytest.raises(ValueError, match="held-out partition"):
+        select_golden_candidates(replace(split, held_out=split.held_out[1:]))
+
+
+@pytest.mark.parametrize("partition", ["development_ids", "retrieval_ids"])
+def test_split_rejects_held_out_ids_listed_in_another_partition(split, partition):
+    overlap = getattr(split.manifest, partition) | {"nominee"}
+    manifest = replace(split.manifest, **{partition: overlap})
+    with pytest.raises(ValueError, match="overlaps"):
+        select_golden_candidates(replace(split, manifest=manifest))
+
+
+@pytest.mark.parametrize("field", ["manifest_id", "source_revision"])
+def test_split_requires_its_own_provenance(split, field):
+    with pytest.raises(ValueError, match="supplies its own"):
+        select_golden_candidates(split, **{field: "other"})
+    incomplete = replace(split.manifest, **{field: " "})
+    with pytest.raises(ValueError, match="Missing manifest ID or source revision"):
+        select_golden_candidates(replace(split, manifest=incomplete))
+    selection = select_golden_candidates(split)
+    stale = replace(split.manifest, **{field: "other"})
+    assert "Selection provenance disagrees with source manifest" in (
+        validate_golden_selection(selection, manifest=stale).errors
+    )
+
+
+def test_split_rejects_reported_cross_partition_semantic_match(split):
+    selection = select_golden_candidates(split)
+    # Synthetic scan finding: one held-out case and one retrieval case are linked.
+    scanned = attach_semantic_scan(split.manifest, [{"consensus", "train"}])
+    assert "Duplicate group crosses partitions" in (
+        validate_golden_selection(selection, manifest=scanned).errors
     )
 
 

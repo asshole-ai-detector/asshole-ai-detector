@@ -2,24 +2,11 @@
 
 from dataclasses import dataclass
 
+from asshole_ai_detector.data.splits import SplitManifest
 from asshole_ai_detector.evaluation.golden_selection import (
     TARGET_COUNTS,
     GoldenSelectionResult,
 )
-
-
-@dataclass(frozen=True)
-class SplitManifest:
-    """One upstream snapshot. None means unverified; () means scanned, zero matches."""
-
-    manifest_id: str
-    source_revision: str
-    held_out_ids: frozenset[str]
-    development_ids: frozenset[str]
-    retrieval_ids: frozenset[str]
-    partition_sizes: tuple[int, int, int]
-    exact_groups: tuple[frozenset[str], ...] | None
-    semantic_groups: tuple[frozenset[str], ...] | None
 
 
 @dataclass(frozen=True)

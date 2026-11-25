@@ -2,15 +2,18 @@ from dataclasses import replace
 
 import pytest
 
+from asshole_ai_detector.data.splits import SplitManifest
+from asshole_ai_detector.evaluation import golden_validation
 from asshole_ai_detector.evaluation.golden_selection import (
     TARGET_COUNTS,
     GoldenCandidate,
     GoldenSelectionResult,
 )
-from asshole_ai_detector.evaluation.golden_validation import (
-    SplitManifest,
-    validate_golden_selection,
-)
+from asshole_ai_detector.evaluation.golden_validation import validate_golden_selection
+
+
+def test_validation_uses_shared_data04_manifest():
+    assert golden_validation.SplitManifest is SplitManifest
 
 
 def make_result() -> GoldenSelectionResult:
@@ -111,6 +114,7 @@ def test_complete_selection_requires_duplicate_groups():
 
 
 def complete_fixture():
+    """Model a synthetic full-inventory scan whose verified result is zero matches."""
     result = GoldenSelectionResult(
         available_counts=dict(TARGET_COUNTS),
         manifest_id="fixture-manifest",
@@ -140,8 +144,12 @@ def complete_fixture():
     return result, manifest
 
 
-def test_complete_zero_match_checks_require_a_manifest():
+def test_strict_distinguishes_verified_empty_scans_from_missing_evidence():
     result, manifest = complete_fixture()
+    unverified = validate_golden_selection(
+        result, manifest=replace(manifest, semantic_groups=None), require_complete=True
+    )
+    assert unverified.errors == ("Semantic duplicate scan not verified",)
     strict = validate_golden_selection(result, manifest=manifest, require_complete=True)
     assert strict.valid and strict.source_revision == manifest.source_revision
     legacy = validate_golden_selection(

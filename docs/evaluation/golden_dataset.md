@@ -3,11 +3,9 @@
 
 ## Overview
 
-This module prepares preliminary candidates for the 200-example
-AITA Golden Dataset used in final system evaluation.
-
-It implements deterministic candidate selection and JSON exports.
-It does not perform human annotation or dataset splitting.
+EVAL-01 selects up to 200 preliminary candidates for final system evaluation
+from DATA-04's deduplicated held-out pool. Each selected case awaits independent
+human annotation and adjudication.
 
 ## Target Distribution
 
@@ -17,26 +15,35 @@ It does not perform human annotation or dataset splitting.
 | YTA | 40 |
 | ESH | 40 |
 | NAH | 40 |
-| Community disagreement | 20 |
-| Insufficient information | 20 |
+| `disputed` (community disagreement) | 20 |
+| `missing_context` (human-nominated for review) | 20 |
 | **Total** | **200** |
 
 ## Input
 
-The selection function accepts validated `AITACase` objects
-produced by the existing DATA-02/DATA-03 pipeline.
+DATA-04 deduplicates validated DATA-02/DATA-03 cases across the combined
+provider train and test inputs. It draws the held-out pool (default 800) and
+development set (default 500) from provider test cases. Retained provider
+train cases supply retrieval. Surplus test cases remain unused.
 
-DATA-04 must provide a deduplicated, isolated held-out
-candidate pool before production selection can be performed.
+Pass the resulting `SplitResult` to `select_golden_candidates`. It reads
+`split.golden_candidates` (an alias for `split.held_out`) and takes the manifest ID
+and pinned source revision directly from `split.manifest`. The selector checks
+the full pool against the manifest before applying nominations, exclusions,
+or quotas. A missing, extra, repeated, or cross-partition pool ID raises an error.
+Keep the cases together with the manifest returned by DATA-04.
 
 ## Selection Rules
 
-- Consensus cases require at least five valid moral comments
-  and at least 70% agreement.
-- Disputed cases require at least five valid moral comments
-  and less than 70% agreement.
+- All categories require 5–10 valid moral comments from the original top ten
+  ranked slots. DATA-04's minimum consensus-label counts reserve candidates.
+  EVAL-01 counts eligible cases after applying exclusions and nominations.
+- A winning share of at least 70% qualifies for the corresponding moral verdict.
+  Below 70%, DATA-04's `DISPUTED` label maps to EVAL-01's `disputed` category.
 - INFO comments are excluded from moral consensus.
 - For EVAL-01, a coordinator supplies human nominations by held-out post ID.
+  A nomination outside the 5–10 valid moral comment range stops selection
+  from a DATA-04 split with an error identifying the case and its count.
   Only DATA-02-accepted cases enter this pool (at least five moral comments).
   Reserve nominees for missing-context review before sampling other categories,
   even if a nominee has strong consensus. INFO or disagreement alone never
@@ -45,37 +52,40 @@ candidate pool before production selection can be performed.
 - Categories are mutually exclusive.
 - Duplicate post IDs are rejected.
 - Explicitly excluded post IDs are not selected.
-- Selection uses a configurable random seed.
+- Selection uses its own configurable random seed (default 42).
 
-If insufficient candidates exist, the module reports shortages
-rather than filling categories with invalid examples.
+The report gives the shortfall for each category when the eligible pool cannot
+fill its quota.
 
-## JSON Artifacts
+## Run selection and preliminary validation
 
-Selection produces two coordinator artifacts:
-
-- `export_golden_candidates`: preliminary candidate metadata.
-- `export_selection_report`: counts, targets, and shortages.
-
-Example:
+Start with validated `train_cases` and `test_cases` from the same pinned
+`source_revision`, the original `provider_test_ids`, and a coordinator's set of
+human-nominated held-out IDs (`nominated_ids`, possibly empty). If DATA-04 has
+already supplied `split`, start at the selection call.
 
 ```python
 from pathlib import Path
 
+from asshole_ai_detector.data.deduplication import deduplicate_cases
+from asshole_ai_detector.data.splits import split_cases
 from asshole_ai_detector.evaluation.golden_selection import (
     export_golden_candidates,
     export_selection_report,
     select_golden_candidates,
 )
-
 from asshole_ai_detector.evaluation.golden_validation import validate_golden_selection
 
-# The loader and nomination register are supplied by the coordinator.
-result = select_golden_candidates(
-    cases, missing_context_review_ids=nominated_ids, seed=42,
-    manifest_id=manifest.manifest_id, source_revision=manifest.source_revision,
+deduplicated = deduplicate_cases(
+    [*train_cases, *test_cases], preferred_ids=provider_test_ids
 )
-report = validate_golden_selection(result, manifest=manifest)
+split = split_cases(
+    deduplicated.cases, test_ids=provider_test_ids, source_revision=source_revision
+)
+result = select_golden_candidates(
+    split, missing_context_review_ids=nominated_ids, seed=42
+)
+report = validate_golden_selection(result, manifest=split.manifest)
 if report.errors:
     raise ValueError(report.errors)
 # Record report.warnings with the preliminary outputs.
@@ -91,14 +101,9 @@ export_selection_report(
 )
 ```
 
-The `cases` variable is illustrative; a DATA-04 loader is
-not yet implemented.
-
-Candidate exports contain IDs and selection statistics,
-not narrative or comment text.
-
-Exports do not overwrite existing files unless explicitly
-requested.
+Both exports are coordinator-only. They contain candidate metadata or aggregate
+counts and omit narratives and comments. Each export requires a new output path
+unless the coordinator explicitly requests overwrite.
 
 ## Human Annotation
 
@@ -136,35 +141,53 @@ must cover all six categories, with nonnegative integer counts at least as large
 as their selected counts. The report export rejects missing or inconsistent
 inventories. Its `complete` field describes the quota counts only.
 
-Preliminary mode permits shortages. Legacy callers can pass all three ID sets
-and optional duplicate groups. Missing inventory or scan evidence is reported
-in warnings. Read both errors and warnings: preliminary `valid` means the
-checks on supplied evidence passed. Do not use it to release evaluation data.
+Preliminary mode permits shortages and warns about pending scan evidence.
+Existing callers can select from a list of validated cases and pass three ID
+sets and optional duplicate groups to validation. These callers establish pool
+isolation themselves. Use the integrated path for a DATA-04 selection.
 
-Use `validate_golden_selection(result, manifest=manifest, require_complete=True)`
-for the strict selection gate. It requires 200 unique records in the exact
-six quotas, available counts and one trusted DATA-04 snapshot:
+The shared `asshole_ai_detector.data.splits.SplitManifest` is authoritative.
+Use the same manifest for selection and validation. Validation checks the
+manifest ID, source revision, the three disjoint ID inventories, and their sizes
+in held-out, development, retrieval order.
 
-- Populate `SplitManifest.manifest_id` and `source_revision` from the actual
-  manifest. Supply full held-out, development and retrieval ID sets and
-  `partition_sizes` **in that order**, taken independently from the split report.
-- Supply `exact_groups` and `semantic_groups` separately as tuples of ID sets.
-  Use `None` for a pending or unavailable scan. An empty tuple means a completed
-  scan of this inventory found zero matches. Never translate missing output into
-  an empty tuple. A legacy `duplicate_groups=[]` establishes neither status.
-- Group members must map to these partitions. Supply pairs or groups of at
-  least two IDs. Validation connects overlapping groups across both scans,
-  rejects components crossing any partition, and allows at most one selected
-  Golden ID per component. Upstream must map discarded IDs to representatives
-  or resolve them before supplying this inventory.
-- Bind the selection to its manifest ID and revision when loading its cases. Strict validation rejects a stale or unbound selection. Keep the manifest with the report. The validator records its ID and revision
-  and checks internal consistency. Authenticating its origin, verifying scan
-  coverage, obtaining training-data overlap checks where applicable, and
-  enforcing the index/prompt exclusions are upstream or downstream responsibilities.
+DATA-04 returns `exact_groups=()` after verifying exact uniqueness of retained
+cases. Its initial `semantic_groups=None` means semantic isolation is unverified.
+Strict validation fails in this state even when all 200 places are filled.
+Only a completed scan of the full held-out, development, and retrieval
+inventories can establish a verified empty semantic result (`()`).
 
-DATA-04 can deliver exact deduplication before semantic verification exists.
-A preliminary report can be useful then. Strict validation stays blocked
-until actual results for both checks exist. Neither mode certifies human labels.
+Once the coordinator has verified scan results for this snapshot,
+`attach_semantic_scan` attaches those findings to a copy of the same manifest.
+Use that manifest throughout the strict run.
+
+```python
+from dataclasses import replace
+
+from asshole_ai_detector.data.splits import attach_semantic_scan
+
+scanned_manifest = attach_semantic_scan(split.manifest, verified_groups)
+scanned_split = replace(split, manifest=scanned_manifest)
+result = select_golden_candidates(
+    scanned_split, missing_context_review_ids=nominated_ids, seed=42
+)
+strict = validate_golden_selection(
+    result, manifest=scanned_split.manifest, require_complete=True
+)
+if strict.errors:
+    raise ValueError(strict.errors)
+```
+
+Strict validation requires exactly 200 unique eligible candidates in the six
+quotas and complete inventory counts. It connects overlapping duplicate groups
+across both scans, rejects groups with unknown IDs or cross-partition members,
+and permits at most one selected candidate per connected group.
+
+A valid strict report verifies candidate selection only. Final annotations still
+require two independent human judgments per case, human confirmation of
+missing-context labels, and adjudication. The coordinator remains
+responsible for verifying the source and scan coverage, documenting any training
+overlap checks, and enforcing index and prompt exclusions.
 
 ## Reproducibility
 
@@ -185,7 +208,8 @@ provide a complete reproducibility manifest.
 ## Annotation Review Preparation
 
 `golden_annotation_prep.py` prepares metadata-only review records
-from selected candidates and validated `AITACase` objects.
+from selected candidates and validated `AITACase` objects. Use
+`prepare_annotation_records(result, split.golden_candidates)` for this batch.
 
 The preparation step:
 - Matches selected candidates to their source cases.
@@ -250,22 +274,11 @@ Passing these checks does not establish the independence or quality of human jud
 
 ## Current Status
 
-Implemented:
-- Deterministic candidate selection
-- Category quotas and shortage reporting
-- Duplicate-ID validation
-- Explicit ID exclusions
-- Provisional missing-context review category
-- JSON candidate and report exports
-- Coordinator and blinded review exports, source reconciliation, and regression tests
-
-Pending:
-- DATA-04 manifest integration
-- Verified near-duplicate and partition exclusion
-- Real candidate selection
-- Human annotation and adjudication
-- Final GoldenAnnotation validation
-- Final dataset freeze
+The integrated selection, validation, and review-preparation workflow is tested
+with synthetic cases. A final dataset still requires a real pinned split, a
+verified semantic scan, sufficient eligible candidates and human nominations,
+independent annotation, adjudication, final quota and source checks, and a
+dataset freeze.
 
 ## References
 
