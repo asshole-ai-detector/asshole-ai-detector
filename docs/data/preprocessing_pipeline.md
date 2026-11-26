@@ -37,7 +37,7 @@ After the run, reload the split and original rows (from repository root):
 
 ```python
 from pathlib import Path
-from scripts.prepare_data import load_prepared
+from asshole_ai_detector.data.pipeline import load_prepared
 from asshole_ai_detector.evaluation.golden_selection import select_golden_candidates
 from asshole_ai_detector.evaluation.golden_annotation_prep import prepare_annotation_records
 from asshole_ai_detector.evaluation.golden_validation import validate_golden_selection
