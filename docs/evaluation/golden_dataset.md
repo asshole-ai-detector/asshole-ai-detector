@@ -272,6 +272,58 @@ categories and select replacements from the same held-out pool as needed.
 Passing these checks does not establish the independence or quality of human judgments.
 
 
+## Annotation batches (EVAL-02)
+
+`golden_annotation_review.py` tracks independent review, agreement and progress.
+Every verdict and field comes from a human reviewer; the module only checks,
+stores and counts them. Keep all files below in `artifacts/annotations/`
+(ignored by Git) or other restricted storage.
+
+| Step | Who | Tool | Output (private) |
+|---|---|---|---|
+| 1. Issue narratives | Coordinator | `export_blinded_assignments` | assignment file + private assignment-to-case map |
+| 2. Assign two reviewers per case, fixed order | Coordinator | `BatchPlan(batch_id, {assignment_id: (first, second)})`, saved with `to_dict()` | batch plan |
+| 3. Hand out answer files | Coordinator | `export_review_template(plan, reviewer, path)` | one empty file per reviewer |
+| 4. Annotate privately | Each reviewer | edit their own file only | filled reviewer file |
+| 5. Lock originals before comparing | Coordinator | `lock_submissions(files, lock_path)` | lock file with SHA-256 hashes |
+| 6. Agreement before discussion | Coordinator | `load_locked_submissions`, `pair_submissions`, `compute_agreement` | percentage agreement, Cohen's kappa, disagreement list |
+| 7. Resolve and finalize | Adjudicator | `build_golden_record` + `validate_completed_annotation` (with `Adjudication` if the category changed) | final `GoldenAnnotation` records |
+| 8. Report | Coordinator | `build_progress_report` | batch and category progress |
+
+Rules enforced in code:
+
+- A reviewer file is valid only when every field is filled: verdict
+  (NTA/YTA/ESH/NAH/UNDETERMINED), at least one key fact, framing bias,
+  uncertainty tier, initial action and notes. An unfilled template fails.
+- Each assignment has exactly two different reviewers; answers from unassigned
+  reviewers, unknown assignments or other batches are refused.
+- A locked file that changes afterwards is refused, so the original answers stay
+  available for agreement analysis.
+- Kappa uses the original verdicts, with UNDETERMINED as its own label, and is
+  reported as undefined (with a note) when both reviewers used one identical label.
+- Final records take `annotator_verdicts` from the locked submissions and the
+  narrative and community votes (including INFO) from the pinned source.
+- Each case counts once, under one final category, so missing-context cases are
+  never counted under a verdict as well. The progress report lists assignment
+  IDs, not source case IDs.
+
+### Week 8 batch
+
+Planning target: 40–60 double-annotated cases (final 200 in Week 10). Record the
+batch here when it is agreed:
+
+| Field | Value |
+|---|---|
+| Batch ID | _to agree_ |
+| Batch size and category mix | _to agree_ |
+| Reviewers and pairing | _to agree_ |
+| Adjudicator | _to agree_ |
+| Deadline | _to agree_ |
+
+Choose the batch mix with the remaining category counts in mind (for example,
+ESH and NAH candidates are scarce). Golden candidate IDs stay excluded from RAG
+indexing, threshold tuning and model selection throughout.
+
 ## Current Status
 
 The integrated selection, validation, and review-preparation workflow is tested

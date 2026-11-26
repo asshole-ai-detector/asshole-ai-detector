@@ -101,6 +101,12 @@ For each case, reviewers should record:
 
 Do not infer unsupported motivations, intentions, or events.
 
+Reviewers record these answers in the file from `export_review_template`
+(fields `verdict`, `key_facts`, `missing_information`,
+`alternative_perspectives`, `framing_bias`, `expected_uncertainty_tier`,
+`expected_initial_action`, `notes`). Edit only your own file, and return it to
+the coordinator once; it is locked before any comparison.
+
 ## 6. Completeness Review
 
 Consider whether the narrative provides enough information
