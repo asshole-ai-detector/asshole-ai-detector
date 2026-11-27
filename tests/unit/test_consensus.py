@@ -6,7 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from asshole_ai_detector.data.cleaning import CleanedAITACase
-from asshole_ai_detector.data_processing.consensus import label_cleaned_case
+from asshole_ai_detector.data.consensus import label_cleaned_case
 from asshole_ai_detector.schemas.annotation import CommunityVotes, Verdict
 from asshole_ai_detector.schemas.case import (
     AITACase,
