@@ -6,7 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from asshole_ai_detector.data.aita_adapter import row_to_normalized
-from asshole_ai_detector.data_processing.consensus import label_cleaned_case
+from asshole_ai_detector.data.consensus import label_cleaned_case
 from asshole_ai_detector.evaluation.golden_annotation_prep import (
     Adjudication,
     AnnotationSource,
