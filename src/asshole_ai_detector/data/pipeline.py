@@ -28,12 +28,12 @@ from asshole_ai_detector.data.cleaning import (
     CleaningReport,
     clean_case,
 )
+from asshole_ai_detector.data.consensus import label_cleaned_case
 from asshole_ai_detector.data.deduplication import (
     DeduplicationResult,
     deduplicate_cases,
 )
 from asshole_ai_detector.data.splits import SplitManifest, SplitResult, split_cases
-from asshole_ai_detector.data_processing.consensus import label_cleaned_case
 from asshole_ai_detector.schemas.case import AITACase, NormalizedAITACase
 
 
