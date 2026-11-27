@@ -75,4 +75,4 @@ The query check is only a smoke test; retrieval relevance is evaluated separatel
   between indexing-time tests and retrieval.
 - Posts in this dataset are at most about 650 words, so the cap is expected to trigger rarely; it protects
   future sources with longer posts (Section 3.3).
-- The vector database, reranking and the near-duplicate scan belong to RAG-02, RAG-03 and DATA-05.
+- The vector database, reranking and the near-duplicate scan belong to RAG-02, RAG-03 and RAG-04.

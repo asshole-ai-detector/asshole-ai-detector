@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from asshole_ai_detector.data.cleaning import CleanedAITACase, clean_cases
-from asshole_ai_detector.data_processing.consensus import label_cleaned_case
+from asshole_ai_detector.data.consensus import label_cleaned_case
 from asshole_ai_detector.rag.embeddings import (
     Embedder,
     EmbeddingConfig,
