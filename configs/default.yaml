@@ -2,14 +2,13 @@
 # Development-tuned thresholds must remain unset until validated and frozen.
 
 project:
-  seed: 42  # proposed reproducibility seed; confirm/freeze in ARCH-02
+  seed: 42
 
 data_sources:
   aita:
     hf_dataset: MattBoraske/reddit-AITA-submissions-and-comments-multiclass
-    # Pinned dataset commit (last modified 2024-03-28) for reproducible loading.
     revision: 84c229ffd926e8efaa1828a5d3803f29231f2d0e
-    # Both provider splits are loaded; our own splits are created later.
+    # Both original provider splits are loaded and deduplicated together.
     hf_splits: [train, test]
 
 preprocessing:
@@ -21,6 +20,28 @@ preprocessing:
   clarification_label: INFO
 
 splits:
+  # CHANGED: sample Golden/dev from both original source partitions after
+  # cleaning and global deduplication, not just original HF test.
+  strategy: combined_stratified
+  golden_candidate_pool_size: 800
+  development_size: 500
+
+  # These are PRELIMINARY Golden pool minimums, not EVAL-01 final targets.
+  golden_candidate_minimums:
+    NTA: 40
+    YTA: 40
+    ESH: 60
+    NAH: 60
+    DISPUTED: 20
+
+  development_minimums:
+    NTA: 50
+    YTA: 50
+    ESH: 40
+    NAH: 50
+    DISPUTED: 50
+
+  # EVAL-01's final 200 human-reviewed cases; unchanged.
   golden_targets:
     NTA: 40
     YTA: 40
@@ -28,7 +49,7 @@ splits:
     NAH: 40
     disputed: 20
     missing_context: 20
-  dev_size: null  # confirm in ARCH-02
+  dev_size: null  # legacy placeholder; explicit development_size above is used
   enforce_no_overlap: true
   near_duplicate_cosine_threshold: 0.95  # initial value, to validate
 
@@ -46,13 +67,13 @@ rag:
   evidence_cases: 5
   comments_per_case: 3
   comment_word_limit: 60
-  rerank_retry_threshold: 0.5  # initial dev-tuned threshold
-  disagreement_threshold: null  # dev-tuned; do not guess
+  rerank_retry_threshold: 0.5
+  disagreement_threshold: null
 
 classifier:
   model_family: roberta-base
   labels: [NTA, YTA, ESH, NAH, INFO]
-  t_info: null  # dev-tuned
+  t_info: null
 
 agent:
   max_clarification_questions: 3
@@ -60,12 +81,11 @@ agent:
   max_llm_calls_without_clarification: 4
   max_explanation_revisions: 1
   uncertainty_priority: [withhold, split, leaning, confident]
-  m_low: null   # dev-tuned
-  m_high: null  # dev-tuned
+  m_low: null
+  m_high: null
 
 llm:
   initial_default_model: Qwen/Qwen3-4B-Instruct-2507
-  end_to_end_latency_target_seconds: 30  # target, not a guarantee
+  end_to_end_latency_target_seconds: 30
 
-# Model revision pins and frozen thresholds belong in the recorded experiment
-# configuration and index manifest before running final Golden evaluation.
+# Freeze model revisions and tuned thresholds before the Golden evaluation.

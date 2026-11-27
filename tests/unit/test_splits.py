@@ -1,15 +1,28 @@
 """DATA-04: split isolation, reproducibility, and EVAL-01 compatibility."""
 
-from typing import Literal
+from typing import Literal, TypedDict
 
 import pytest
 from pydantic import HttpUrl
 
-from asshole_ai_detector.data.splits import attach_semantic_scan, split_cases
+from asshole_ai_detector.data.splits import (
+    SplitResult,
+    SplitStrategy,
+    attach_semantic_scan,
+    split_cases,
+)
 from asshole_ai_detector.schemas.annotation import Verdict
 from asshole_ai_detector.schemas.case import AITACase, AITAComment, DerivedFields
 
 MINIMUMS = {"NTA": 1, "YTA": 1, "ESH": 1, "NAH": 1, "DISPUTED": 1}
+
+
+class SplitOptions(TypedDict):
+    """Explicit keyword argument types for Pylance when unpacking opts."""
+
+    strategy: SplitStrategy
+    minimums: dict[str, int]
+    development_minimums: dict[str, int]
 
 
 def make_case(
@@ -60,7 +73,9 @@ def run_split(
     golden_size: int = 10,
     development_size: int = 5,
     minimums: dict[str, int] | None = None,
-):
+    development_minimums: dict[str, int] | None = None,
+    strategy: SplitStrategy = "provider_test",
+) -> SplitResult:
     initial, provider_test_ids = make_records()
     return split_cases(
         cases if cases is not None else initial,
@@ -69,6 +84,8 @@ def run_split(
         golden_size=golden_size,
         development_size=development_size,
         golden_minimums=MINIMUMS if minimums is None else minimums,
+        development_minimums=development_minimums,
+        strategy=strategy,
         seed=seed,
     )
 
@@ -167,3 +184,75 @@ def test_semantic_scan_status_requires_actual_evidence() -> None:
     assert scanned.semantic_groups == ()
     with pytest.raises(ValueError, match="2\\+ retained"):
         attach_semantic_scan(original, [{"unknown-id", "test-01"}])
+
+
+def test_combined_stratified_reserves_rare_classes_in_both_pools() -> None:
+    cases, ids = make_records()
+    gold_min = {"ESH": 3, "NAH": 3, "NTA": 1}
+    dev_min = {"ESH": 2, "NAH": 2}
+    result = run_split(
+        cases, ids, strategy="combined_stratified",
+        minimums=gold_min,
+        development_minimums=dev_min,
+    )
+    from collections import Counter
+
+    gold = Counter(case.derived_fields.consensus_label for case in result.held_out)
+    dev = Counter(case.derived_fields.consensus_label for case in result.development)
+    assert all(gold[label] >= n for label, n in gold_min.items())
+    assert all(dev[label] >= n for label, n in dev_min.items())
+    assert len(result.held_out) == 10
+    assert len(result.development) == 5
+    assert len(result.retrieval) == 25
+    assert result.unused_test == []
+    assert result.manifest.strategy == "combined_stratified"
+    assert {c.post_id for c in result.held_out}.isdisjoint(
+        {c.post_id for c in result.development + result.retrieval}
+    )
+
+
+def test_combined_can_select_original_train_into_golden() -> None:
+    cases, ids = make_records()
+    result = run_split(
+        cases, ids,
+        strategy="combined_stratified",
+        minimums={"ESH": 6},
+        development_minimums={"ESH": 1},
+    )
+    assert any(case.post_id.startswith("train") for case in result.held_out)
+
+
+def test_combined_is_order_independent_and_reproducible() -> None:
+    cases, ids = make_records()
+    opts: SplitOptions = {
+        "strategy": "combined_stratified",
+        "minimums": {"ESH": 3, "NAH": 3},
+        "development_minimums": {"ESH": 2, "NAH": 2},
+    }
+    original = run_split(cases, ids, **opts)
+    reordered = run_split(list(reversed(cases)), ids, **opts)
+    assert original.manifest == reordered.manifest
+    assert original.held_out == reordered.held_out
+    assert original.development == reordered.development
+    assert original.retrieval == reordered.retrieval
+    assert original.manifest.manifest_id != run_split(
+        cases, ids, strategy="combined_stratified",
+        minimums={"ESH": 4, "NAH": 2},
+        development_minimums={"ESH": 2, "NAH": 2},
+    ).manifest.manifest_id
+
+
+def test_combined_fails_on_infeasible_combined_quota() -> None:
+    with pytest.raises(ValueError, match="Not enough ESH"):
+        run_split(
+            strategy="combined_stratified",
+            minimums={"ESH": 7},
+            development_minimums={"ESH": 2},
+        )
+
+
+def test_rejects_bad_development_minimums() -> None:
+    with pytest.raises(ValueError, match="Invalid Development"):
+        run_split(strategy="combined_stratified", development_minimums={"BAD": 1})
+    with pytest.raises(ValueError, match="Development minimum quotas exceed"):
+        run_split(strategy="combined_stratified", development_minimums={"ESH": 6})
