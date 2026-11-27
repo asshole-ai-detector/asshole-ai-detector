@@ -34,6 +34,11 @@ splits:
 
 rag:
   embedding_model: Qwen/Qwen3-Embedding-0.6B
+  # Pinned model commit (last modified 2026-04-20); indexing and retrieval must match.
+  embedding_revision: 97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3
+  # Query prefix from Section 3.4; documents are embedded without a prefix.
+  embedding_query_instruction: Given a description of an interpersonal conflict, retrieve similar conflicts
+  embedding_batch_size: 32
   reranker_model: Qwen/Qwen3-Reranker-0.6B
   embedding_dimensions: 1024
   index_max_posts: 20000
