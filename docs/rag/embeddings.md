@@ -51,13 +51,22 @@ The query check is only a smoke test; retrieval relevance is evaluated separatel
 
 | Measurement | Result |
 | --- | --- |
-| Hardware | _to fill after the Colab run_ |
-| Model load time | _to fill_ |
-| Token length (median / max) | _to fill_ |
-| Posts over 1,024 tokens | _to fill_ |
-| Dimensions / norm range | _to fill_ |
-| Time per post / per query | _to fill_ |
-| Top-1 source match | _to fill_ |
+| Hardware | Google Colab, NVIDIA T4 GPU, Python 3.13.16 |
+| Model load time | 40.5 s (first run, includes downloading the model) |
+| Sample | 200 cleaned and labeled cases from the provider `test` split |
+| Token length (median / max) | 501.5 / 724 tokens |
+| Posts over 1,024 tokens | 0 of 200 |
+| Dimensions / norm range | 1,024 / 1.000000 to 1.000000 |
+| Time per post / per query | 59 ms (11.8 s for 200 posts) / 8 ms |
+| Top-1 source match | 129 of 200 (64%) |
+
+**Observations:**
+
+- All vectors have 1,024 dimensions and unit norm, as required for cosine similarity.
+- No post reached the 1,024-token cap (maximum 724 tokens), which matches the dataset's length filtering seen in DATA-01. The cap remains a safety limit for other sources.
+- Embedding the full retrieval index (up to 20,000 posts) should take roughly 20 minutes on a T4 at this speed, within the "under an hour" estimate of Section 3.8.
+- The top-1 check is far above chance (1 in 200), but 36% of queries do not retrieve their own post first. A query built from only the first two sentences is often too generic (for example a background introduction), so this is a smoke test, not a retrieval quality measure. Relevance is evaluated on the development set (Section 3.9).
+- The `pip` warning about `cudf` / `pyarrow` comes from a library preinstalled on Colab that this project does not use.
 
 ## Notes
 
