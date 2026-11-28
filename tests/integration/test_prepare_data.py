@@ -229,3 +229,170 @@ def test_duplicate_provider_id_prefers_original_test_source_row() -> None:
         for comment in prepared.golden_sources["shared"].comments
     )
     assert "trainonly" in prepared.golden_sources
+
+
+def test_strict_verification_is_opt_in_for_historical_exports(tmp_path):
+    prepared = run_test_pipeline()
+    export_prepared(prepared, tmp_path)
+    assert load_prepared(tmp_path, strict=True).splits == prepared.splits
+    path = tmp_path / "split_manifest.json"
+    raw = json.loads(path.read_text())
+    del raw["strategy"]
+    path.write_text(json.dumps(raw))
+    assert load_prepared(tmp_path).splits == prepared.splits
+    with pytest.raises(ValueError, match="re-export"):
+        load_prepared(tmp_path, strict=True)
+
+
+@pytest.mark.parametrize(
+    "inventory", ["held_out_ids", "development_ids", "retrieval_ids"]
+)
+def test_strict_verification_detects_repeated_raw_inventory_ids(tmp_path, inventory):
+    export_prepared(run_test_pipeline(), tmp_path)
+    path = tmp_path / "split_manifest.json"
+    raw = json.loads(path.read_text())
+    raw[inventory].append(raw[inventory][0])
+    path.write_text(json.dumps(raw))
+    with pytest.raises(ValueError, match="Duplicate IDs in manifest"):
+        load_prepared(tmp_path, strict=True)
+
+
+@pytest.mark.parametrize(
+    "partition", ["rag_candidates", "development", "golden_pool", "unused_test"]
+)
+def test_strict_verification_binds_full_payloads(tmp_path, partition):
+    export_prepared(run_test_pipeline(), tmp_path)
+    path = tmp_path / f"{partition}.jsonl"
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    rows[0]["valid_comments"][0]["text"] = "Different evidence under an unchanged ID."
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    with pytest.raises(ValueError, match="fingerprint"):
+        load_prepared(tmp_path, strict=True)
+
+
+@pytest.mark.parametrize(
+    "change", ["size", "source", "strategy", "seed", "cleaning", "semantic"]
+)
+def test_strict_verification_rejects_inconsistent_report(tmp_path, change):
+    export_prepared(run_test_pipeline(), tmp_path)
+    path = tmp_path / "preprocessing_report.json"
+    report = json.loads(path.read_text())
+    if change == "size":
+        report["splits"]["retrieval"] += 1
+    elif change == "source":
+        report["source_revision"] = "another-revision"
+    elif change == "strategy":
+        report["partition_strategy"] = "combined_stratified"
+    elif change == "seed":
+        report["seed"] += 1
+    elif change == "cleaning":
+        report["cleaning_config"]["min_post_words"] = 1
+    else:
+        report["semantic_near_duplicate_scan"] = "verified"
+    path.write_text(json.dumps(report))
+    with pytest.raises(ValueError):
+        load_prepared(tmp_path, strict=True)
+
+
+@pytest.mark.parametrize(
+    ("strategy", "field", "partition", "bad_counts"),
+    [
+        # Correct row total, wrong consensus labels.
+        ("combined_stratified", "label_counts", "held_out", {"NAH": 2}),
+        ("provider_test", "label_counts", "retrieval", {"NTA": True}),
+        ("combined_stratified", "eligible_combined_counts", None, {"NTA": 5}),
+        # Same test total, but too many ESH cases for the combined corpus.
+        ("combined_stratified", "eligible_test_counts", None, {"ESH": 4}),
+        # Feasible for the whole corpus, incorrect for the known provider-test cases.
+        ("provider_test", "eligible_test_counts", None, {"NTA": 3, "ESH": 1}),
+        (
+            "combined_stratified",
+            "source_partition_counts",
+            "retrieval",
+            {"original_train": 1, "original_test": 0},
+        ),
+        (
+            "combined_stratified",
+            "source_partition_counts",
+            "retrieval",
+            {"original_train": 3, "original_test": -1},
+        ),
+        (
+            "combined_stratified",
+            "source_partition_counts",
+            "retrieval",
+            {"original_train": True, "original_test": 1},
+        ),
+        # Correct row size, impossible when reconciled with the eligible-test total.
+        (
+            "combined_stratified",
+            "source_partition_counts",
+            "development",
+            {"original_train": 1, "original_test": 0},
+        ),
+    ],
+)
+def test_report_distributions_checked_only_in_strict_mode(
+    tmp_path, strategy, field, partition, bad_counts
+):
+    train, test = sample_rows()
+    prepared = prepare(
+        train,
+        test,
+        split_strategy=strategy,
+        golden_size=2,
+        development_size=1,
+        golden_minimums={},
+    )
+    export_prepared(prepared, tmp_path)
+    assert load_prepared(tmp_path, strict=True).splits == prepared.splits
+    path = tmp_path / "preprocessing_report.json"
+    report = json.loads(path.read_text())
+    if partition is None:
+        report["splits"][field] = bad_counts
+    else:
+        report["splits"][field][partition] = bad_counts
+    path.write_text(json.dumps(report))
+    assert load_prepared(tmp_path).splits == prepared.splits
+    with pytest.raises(ValueError, match="counts"):
+        load_prepared(tmp_path, strict=True)
+
+
+def test_provider_source_swap_with_plausible_margins_is_rejected(tmp_path):
+    prepared = run_test_pipeline()
+    sources = prepared.report["splits"]["source_partition_counts"]
+    sources["development"], sources["retrieval"] = (
+        sources["retrieval"],
+        sources["development"],
+    )
+    export_prepared(prepared, tmp_path)
+    with pytest.raises(ValueError, match="source_partition_counts"):
+        load_prepared(tmp_path, strict=True)
+
+
+def test_combined_export_cannot_identify_provider_origin_per_case(tmp_path):
+    rows = [raw_row(f"case{i}") for i in range(4)]
+    options = {
+        "split_strategy": "combined_stratified",
+        "golden_size": 1,
+        "development_size": 1,
+        "golden_minimums": {},
+    }
+    first = prepare(rows[:2], rows[2:], **options)
+    second = prepare(rows[2:], rows[:2], **options)
+    assert first.splits == second.splits
+    assert (
+        first.report["splits"]["source_partition_counts"]
+        != second.report["splits"]["source_partition_counts"]
+    )
+    for name, prepared in (("first", first), ("second", second)):
+        export_prepared(prepared, tmp_path / name)
+        assert load_prepared(tmp_path / name, strict=True).splits == prepared.splits
+
+
+def test_source_counts_cannot_exceed_available_provider_rows(tmp_path):
+    prepared = run_test_pipeline()
+    prepared.report["original_counts"]["test"] = len(prepared.splits.held_out)
+    export_prepared(prepared, tmp_path)
+    with pytest.raises(ValueError, match="source counts"):
+        load_prepared(tmp_path, strict=True)

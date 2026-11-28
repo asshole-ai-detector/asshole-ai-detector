@@ -171,7 +171,7 @@ def _ensure_exactly_unique(cases: list[AITACase]) -> None:
         raise ValueError("Repeated normalized narratives: deduplicate before splitting")
 
 
-def _manifest_id(
+def split_manifest_id(
     partitions: dict[str, list[AITACase]],
     *,
     source_revision: str,
@@ -290,7 +290,7 @@ def split_cases(
         raise ValueError("Partition allocation did not meet requested sizes")
 
     manifest = SplitManifest(
-        manifest_id=_manifest_id(
+        manifest_id=split_manifest_id(
             {
                 "held_out": held_out,
                 "development": development,

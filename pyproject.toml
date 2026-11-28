@@ -28,6 +28,9 @@ dev = [
     "pytest>=9.2.0",
     "ruff>=0.17.5",
 ]
+index = [
+    "chromadb>=1.5.9,<2",
+]
 rag = [
     "sentence-transformers>=6.3.0",
 ]

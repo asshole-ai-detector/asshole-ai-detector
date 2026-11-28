@@ -32,6 +32,7 @@ from asshole_ai_detector.data.splits import (
     SplitResult,
     SplitStrategy,
     split_cases,
+    split_manifest_id,
 )
 from asshole_ai_detector.schemas.case import AITACase, NormalizedAITACase
 
@@ -268,8 +269,166 @@ def _read_jsonl(path: Path, model: type[AITACase] | type[NormalizedAITACase]) ->
         return [model.model_validate_json(line) for line in file if line.strip()]
 
 
-def load_prepared(output_dir: Path) -> PreparedData:
-    """Restore DATA-04 SplitResult and source rows for EVAL-01."""
+def _reported_counts(value: Any, field: str) -> dict[str, int]:
+    if not isinstance(value, dict) or any(
+        type(count) is not int or count < 0 for count in value.values()
+    ):
+        raise ValueError(f"Invalid preprocessing counts in {field}")
+    return value
+
+
+def _verify_distributions(
+    partitions: dict[str, list[AITACase]], report: dict, strategy: SplitStrategy
+) -> None:
+    stats = report["splits"]
+    retained = partitions.keys() - {"unused_test"}
+    for field in ("label_counts", "source_partition_counts"):
+        table = stats.get(field)
+        if not isinstance(table, dict) or table.keys() != retained:
+            raise ValueError(f"Invalid partition keys in {field}")
+
+    labels = {
+        name: Counter(case.derived_fields.consensus_label for case in cases)
+        for name, cases in partitions.items()
+    }
+    combined_labels = sum(labels.values(), Counter())
+    if _reported_counts(
+        stats.get("eligible_combined_counts"), "eligible_combined_counts"
+    ) != dict(combined_labels):
+        raise ValueError("eligible_combined_counts disagree with exported cases")
+
+    # Unused provider-test cases occur only under the legacy strategy.
+    total_test = len(partitions["unused_test"])
+    for name in sorted(retained):
+        if _reported_counts(stats["label_counts"][name], "label_counts") != dict(
+            labels[name]
+        ):
+            raise ValueError(f"label_counts disagree with {name} cases")
+        sources = _reported_counts(
+            stats["source_partition_counts"][name], "source_partition_counts"
+        )
+        size = len(partitions[name])
+        if (
+            sources.keys() != {"original_train", "original_test"}
+            or sum(sources.values()) != size
+        ):
+            raise ValueError(f"Invalid source_partition_counts for {name}")
+        if strategy == "provider_test" and sources["original_test"] != (
+            0 if name == "retrieval" else size
+        ):
+            raise ValueError(
+                f"source_partition_counts contradict provider_test for {name}"
+            )
+        total_test += sources["original_test"]
+
+    test_labels = _reported_counts(
+        stats.get("eligible_test_counts"), "eligible_test_counts"
+    )
+    if strategy == "provider_test" and test_labels != dict(
+        combined_labels - labels["retrieval"]
+    ):
+        raise ValueError("eligible_test_counts disagree with provider-test cases")
+    # Combined exports carry no per-post provider split. Check the margins
+    # against each other and the number of input rows available from each source.
+    if sum(test_labels.values()) != total_test or any(
+        label not in combined_labels or count > combined_labels[label]
+        for label, count in test_labels.items()
+    ):
+        raise ValueError("eligible_test_counts disagree with label or source totals")
+    original = _reported_counts(report.get("original_counts"), "original_counts")
+    if original.keys() != {"train", "test"} or (
+        total_test > original["test"]
+        or combined_labels.total() - total_test > original["train"]
+    ):
+        raise ValueError("Eligible source counts exceed the reported input inventory")
+
+
+def _verify_export(data: Mapping[str, Any], split: SplitResult, report: dict) -> None:
+    """Check the current export before it is used to publish persistent evidence."""
+    manifest = split.manifest
+    if data.get("strategy") not in ("provider_test", "combined_stratified"):
+        raise ValueError("Missing or unknown split strategy; re-export with DATA-05")
+    if report.get("partition_strategy") != manifest.strategy:
+        raise ValueError("Preprocessing strategy disagrees with the split manifest")
+    for key in ("held_out_ids", "development_ids", "retrieval_ids"):
+        ids = data[key]
+        if not isinstance(ids, list) or any(
+            not isinstance(i, str) or not i.strip() for i in ids
+        ):
+            raise ValueError(f"Invalid manifest inventory: {key}")
+        if len(set(ids)) != len(ids):
+            raise ValueError(f"Duplicate IDs in manifest inventory: {key}")
+    if any(type(size) is not int for size in manifest.partition_sizes):
+        raise ValueError("Invalid partition sizes")
+    if data["exact_groups"] != []:
+        raise ValueError("Expected completed DATA-04 exact deduplication")
+    if data["semantic_groups"] not in (None, []):
+        raise ValueError("Resolve reported semantic groups upstream before indexing")
+    if (
+        manifest.semantic_groups is None
+        and report.get("semantic_near_duplicate_scan") != "not_run"
+    ):
+        raise ValueError("Semantic scan status disagrees with the split manifest")
+    if manifest.semantic_groups == () and report.get(
+        "semantic_near_duplicate_scan"
+    ) in (None, "not_run"):
+        raise ValueError("Semantic scan status disagrees with the split manifest")
+
+    partitions = {
+        "held_out": split.held_out,
+        "development": split.development,
+        "retrieval": split.retrieval,
+        "unused_test": split.unused_test,
+    }
+    unused_ids = {case.post_id for case in split.unused_test}
+    retained = manifest.held_out_ids | manifest.development_ids | manifest.retrieval_ids
+    if len(unused_ids) != len(split.unused_test) or unused_ids & retained:
+        raise ValueError("Duplicate or overlapping unused_test IDs")
+    if manifest.strategy == "combined_stratified" and unused_ids:
+        raise ValueError("Combined split must have an empty unused_test partition")
+    for name, cases in partitions.items():
+        key = "golden_candidate_pool" if name == "held_out" else name
+        count = report["splits"].get(key)
+        if type(count) is not int or count != len(cases):
+            raise ValueError(f"Preprocessing count disagrees with {name} partition")
+    _verify_distributions(partitions, report, manifest.strategy)
+    if (
+        type(split.seed) is not int
+        or type(report.get("schema_version")) is not int
+        or report["schema_version"] != 1
+    ):
+        raise ValueError("Unsupported DATA-05 report schema or invalid split seed")
+    if not all(
+        isinstance(s, str) and s.strip()
+        for s in (report.get("source_dataset"), manifest.source_revision)
+    ):
+        raise ValueError("Missing DATA-05 source provenance")
+    cleaning = asdict(DEFAULT_CLEANING_CONFIG)
+    cleaning["valid_verdicts"] = list(cleaning["valid_verdicts"])
+    if (
+        report.get("cleaning_config") != cleaning
+        or report.get("consensus_threshold") != 0.70
+    ):
+        raise ValueError("Unsupported DATA-05 cleaning or consensus configuration")
+    expected = split_manifest_id(
+        {
+            name: sorted(cases, key=lambda c: c.post_id)
+            for name, cases in partitions.items()
+        },
+        source_revision=manifest.source_revision,
+        seed=split.seed,
+        strategy=manifest.strategy,
+        golden_minimums=report["golden_minimums"],
+        development_minimums=report["development_minimums"],
+    )
+    if manifest.manifest_id != expected:
+        raise ValueError(
+            "Split manifest fingerprint differs from the exported records or policy"
+        )
+
+
+def load_prepared(output_dir: Path, *, strict: bool = False) -> PreparedData:
+    """Restore DATA-05 output. Strict mode also verifies its content fingerprint."""
     manifest_data = json.loads((output_dir / "split_manifest.json").read_text("utf-8"))
     manifest = _manifest_from_json(manifest_data)
     report = json.loads((output_dir / "preprocessing_report.json").read_text("utf-8"))
@@ -299,6 +458,8 @@ def load_prepared(output_dir: Path) -> PreparedData:
     if report["manifest_id"] != manifest.manifest_id or report["source_revision"] != manifest.source_revision:
         raise ValueError("Preparation report disagrees with the manifest")
     splits = SplitResult(held_out, development, retrieval, unused, manifest, report["seed"])
+    if strict:
+        _verify_export(manifest_data, splits, report)
     return PreparedData(splits, source_map, report)
 
 
