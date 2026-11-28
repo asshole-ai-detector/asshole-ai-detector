@@ -168,3 +168,64 @@ def test_load_rejects_tampered_partition_membership(tmp_path) -> None:
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(ValueError, match="disagree with the split manifest"):
         load_prepared(output)
+
+
+def test_combined_golden_keeps_original_train_source(tmp_path) -> None:
+    train, test = sample_rows()
+    # Three distinct NTA records exist across both original partitions:
+    # train002, test001, and test002. The shared train001 narrative is removed.
+    prepared = prepare(
+        train,
+        test,
+        source_revision="synthetic-test-revision",
+        golden_size=3,
+        development_size=1,
+        golden_minimums={"NTA": 3},
+        development_minimums={},
+        split_strategy="combined_stratified",
+    )
+    split = prepared.splits
+    assert split.manifest.strategy == "combined_stratified"
+    assert any(case.post_id == "train002" for case in split.held_out)
+    assert prepared.golden_sources["train002"].post_id == "train002"
+    assert split.unused_test == []
+    assert len(split.retrieval) == 1
+    assert prepared.report["splits"]["source_partition_counts"]["held_out"]["original_train"] >= 1
+    output = tmp_path / "combined"
+    export_prepared(prepared, output)
+    reloaded = load_prepared(output)
+    assert reloaded.splits.manifest == split.manifest
+    assert reloaded.golden_sources == prepared.golden_sources
+
+
+def test_combined_fails_on_impossible_rare_class_quota() -> None:
+    train, test = sample_rows()
+    with pytest.raises(ValueError, match="Eligible combined counts"):
+        prepare(
+            train, test,
+            source_revision="synthetic-test-revision",
+            golden_size=2,
+            development_size=1,
+            golden_minimums={"ESH": 2},
+            split_strategy="combined_stratified",
+        )
+
+
+def test_duplicate_provider_id_prefers_original_test_source_row() -> None:
+    train = [raw_row("shared"), raw_row("trainonly")]
+    test = [raw_row("shared", include_info=True), raw_row("testonly")]
+    prepared = prepare(
+        train,
+        test,
+        source_revision="synthetic-test-revision",
+        golden_size=3,
+        development_size=0,
+        golden_minimums={},
+        split_strategy="combined_stratified",
+    )
+    assert prepared.report["deduplication"]["removed_count"] == 1
+    assert any(
+        comment.verdict == "INFO"
+        for comment in prepared.golden_sources["shared"].comments
+    )
+    assert "trainonly" in prepared.golden_sources

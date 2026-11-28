@@ -1,14 +1,8 @@
-"""DATA-05: execute DATA-01..04 on the pinned AITA dataset.
+"""DATA-05: integrate DATA-01..04, preserving exact source provenance.
 
-This produces isolated, *preliminary* pools for EVAL-01; it does not select
-200 Golden candidates, nominate missing-context cases or perform semantic scans.
-
-Run from the repository root:
-    uv sync --group data
-    uv run python scripts/prepare_data.py
+This exports preliminary pools, not final Golden decisions or semantic scans.
 """
 
-import argparse
 import json
 from collections import Counter
 from collections.abc import Iterable, Mapping
@@ -20,7 +14,6 @@ from asshole_ai_detector.data.aita_adapter import (
     HF_DATASET,
     HF_REVISION,
     iter_normalized_cases,
-    load_aita_dataset,
 )
 from asshole_ai_detector.data.cleaning import (
     DEFAULT_CLEANING_CONFIG,
@@ -33,7 +26,13 @@ from asshole_ai_detector.data.deduplication import (
     DeduplicationResult,
     deduplicate_cases,
 )
-from asshole_ai_detector.data.splits import SplitManifest, SplitResult, split_cases
+from asshole_ai_detector.data.splits import (
+    DEFAULT_GOLDEN_MINIMUMS,
+    SplitManifest,
+    SplitResult,
+    SplitStrategy,
+    split_cases,
+)
 from asshole_ai_detector.schemas.case import AITACase, NormalizedAITACase
 
 
@@ -50,7 +49,7 @@ def _label_rows(
     *,
     source_index: dict[tuple[str, str], NormalizedAITACase] | None = None,
 ) -> tuple[list[AITACase], int]:
-    """Normalize iterable raw rows; optionally preserve source for eligible test cases.
+    """Normalize iterable raw rows; optionally preserve original rows for either source.
 
     A Hugging Face Dataset is an iterable whose individual rows are dicts.
     `iter_normalized_cases(rows)` therefore accepts a Dataset directly.
@@ -83,29 +82,45 @@ def prepare(
     development_size: int = 500,
     seed: int = 42,
     golden_minimums: Mapping[str, int] | None = None,
+    development_minimums: Mapping[str, int] | None = None,
+    split_strategy: SplitStrategy = "provider_test",
 ) -> PreparedData:
-    """Run DATA-01..04, keeping original eligible test membership and sources.
+    """Clean both provider partitions, deduplicate together, then split.
 
-    Raw rows are injected so tests can run offline, without Hugging Face.
+    ``provider_test`` preserves the old default for existing callers/tests.
+    The CLI explicitly opts into ``combined_stratified`` via configuration.
+    Retain ORIGINAL source rows from both provider partitions, because a
+    combined Golden pool can contain former train records.
     """
     cleaning = CleaningReport()
-    train_cases, n_train = _label_rows(train_rows, cleaning)
-    indexed_test_sources: dict[tuple[str, str], NormalizedAITACase] = {}
-    test_cases, n_test = _label_rows(
-        test_rows, cleaning, source_index=indexed_test_sources
+    train_sources: dict[tuple[str, str], NormalizedAITACase] = {}
+    test_sources: dict[tuple[str, str], NormalizedAITACase] = {}
+    train_cases, n_train = _label_rows(
+        train_rows, cleaning, source_index=train_sources
     )
+    test_cases, n_test = _label_rows(
+        test_rows, cleaning, source_index=test_sources
+    )
+    # Match DATA-04's preferred_ids policy if identical labeled records came
+    # from both original sources: prefer the original test source row.
+    indexed_sources = {**train_sources, **test_sources}
 
-    # Only *eligible* test IDs qualify for held-out membership; this also
-    # ensures every held-out record can be reconciled to its source row.
     test_ids = {case.post_id for case in test_cases}
     dedup: DeduplicationResult = deduplicate_cases(
         [*train_cases, *test_cases], preferred_ids=test_ids
     )
-
     eligible_test_counts = Counter(
         case.derived_fields.consensus_label
         for case in dedup.cases
         if case.post_id in test_ids
+    )
+    eligible_combined_counts = Counter(
+        case.derived_fields.consensus_label for case in dedup.cases
+    )
+    effective_golden_minimums = (
+        dict(DEFAULT_GOLDEN_MINIMUMS)
+        if golden_minimums is None
+        else dict(golden_minimums)
     )
     try:
         splits = split_cases(
@@ -115,26 +130,33 @@ def prepare(
             golden_size=golden_size,
             development_size=development_size,
             seed=seed,
-            golden_minimums=golden_minimums,
+            golden_minimums=effective_golden_minimums,
+            development_minimums=development_minimums,
+            strategy=split_strategy,
         )
     except ValueError as error:
         raise ValueError(
             f"DATA-04 splitting failed: {error}. "
+            f"Eligible combined counts: {dict(sorted(eligible_combined_counts.items()))}; "
             f"Eligible provider-test counts: {dict(sorted(eligible_test_counts.items()))}. "
-            "Check quotas with EVAL-01 rather than silently relaxing them."
+            "Coordinate allocations with EVAL-01 rather than silently relaxing quotas."
         ) from error
 
     golden_sources: dict[str, NormalizedAITACase] = {}
     for case in splits.held_out:
-        source = indexed_test_sources.get((case.post_id, case.model_dump_json()))
+        source = indexed_sources.get((case.post_id, case.model_dump_json()))
         if source is None:
             raise ValueError(
-                f"Held-out case {case.post_id} has no matching eligible original test row"
+                f"Held-out case {case.post_id} has no matching original source row"
             )
         golden_sources[case.post_id] = source
 
     def label_counts(cases: list[AITACase]) -> dict[str, int]:
         return dict(sorted(Counter(c.derived_fields.consensus_label for c in cases).items()))
+
+    def source_counts(cases: list[AITACase]) -> dict[str, int]:
+        count_test = sum(case.post_id in test_ids for case in cases)
+        return {"original_train": len(cases) - count_test, "original_test": count_test}
 
     report: dict[str, Any] = {
         "schema_version": 1,
@@ -143,7 +165,9 @@ def prepare(
         "seed": seed,
         "cleaning_config": asdict(DEFAULT_CLEANING_CONFIG),
         "consensus_threshold": 0.70,
-        "partition_strategy": "provider-test-for-heldout-and-development",
+        "partition_strategy": split_strategy,
+        "golden_minimums": dict(sorted(effective_golden_minimums.items())),
+        "development_minimums": dict(sorted((development_minimums or {}).items())),
         "original_counts": {"train": n_train, "test": n_test},
         "cleaning": cleaning.to_dict(),
         "deduplication": {
@@ -162,7 +186,13 @@ def prepare(
                 "development": label_counts(splits.development),
                 "retrieval": label_counts(splits.retrieval),
             },
+            "source_partition_counts": {
+                "held_out": source_counts(splits.held_out),
+                "development": source_counts(splits.development),
+                "retrieval": source_counts(splits.retrieval),
+            },
             "eligible_test_counts": dict(sorted(eligible_test_counts.items())),
+            "eligible_combined_counts": dict(sorted(eligible_combined_counts.items())),
         },
         "manifest_id": splits.manifest.manifest_id,
         "semantic_near_duplicate_scan": "not_run",
@@ -178,6 +208,7 @@ def _manifest_to_json(manifest: SplitManifest) -> dict[str, Any]:
     return {
         "manifest_id": manifest.manifest_id,
         "source_revision": manifest.source_revision,
+        "strategy": manifest.strategy,
         "held_out_ids": sorted(manifest.held_out_ids),
         "development_ids": sorted(manifest.development_ids),
         "retrieval_ids": sorted(manifest.retrieval_ids),
@@ -194,6 +225,7 @@ def _manifest_from_json(data: Mapping[str, Any]) -> SplitManifest:
     return SplitManifest(
         manifest_id=data["manifest_id"],
         source_revision=data["source_revision"],
+        strategy=data.get("strategy", "provider_test"),
         held_out_ids=frozenset(data["held_out_ids"]),
         development_ids=frozenset(data["development_ids"]),
         retrieval_ids=frozenset(data["retrieval_ids"]),
@@ -270,31 +302,3 @@ def load_prepared(output_dir: Path) -> PreparedData:
     return PreparedData(splits, source_map, report)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="DATA-05 AITA preprocessing")
-    parser.add_argument("--output-dir", type=Path, default=Path("artifacts/data"))
-    parser.add_argument("--revision", default=HF_REVISION)
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--golden-size", type=int, default=800)
-    parser.add_argument("--development-size", type=int, default=500)
-    args = parser.parse_args()
-
-    # NOTE: a HF Dataset yields mapping rows, so it can be passed directly
-    # to iter_normalized_cases() through prepare().
-    train = load_aita_dataset(revision=args.revision, splits=("train",))
-    test = load_aita_dataset(revision=args.revision, splits=("test",))
-    prepared = prepare(
-        train,
-        test,
-        source_revision=args.revision,
-        seed=args.seed,
-        golden_size=args.golden_size,
-        development_size=args.development_size,
-    )
-    export_prepared(prepared, args.output_dir)
-    print(json.dumps(prepared.report, indent=2))
-    print(f"\nPrivate outputs saved to: {args.output_dir}")
-
-
-if __name__ == "__main__":
-    main()

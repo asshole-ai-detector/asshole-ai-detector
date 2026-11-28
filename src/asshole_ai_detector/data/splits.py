@@ -1,7 +1,11 @@
-"""DATA-04: reproducible RAG/development/Golden-candidate partitions.
+"""DATA-04: reproducible isolated AITA partitions with optional combined stratification.
 
-Uses the upstream Hugging Face test IDs as the only evaluation source.
-Call only on the output of deduplicate_cases() over combined train+test.
+Two policies are supported:
+- provider_test: original HF test cases are eligible for Golden/dev; train for retrieval.
+- combined_stratified: any clean/deduplicated case may be sampled into Golden/dev;
+  all remaining cases are retrieval-eligible. Never use Golden/dev in training or RAG.
+
+Only call on cases deduplicated across ALL original provider partitions.
 """
 
 import json
@@ -9,13 +13,14 @@ from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass, replace
 from hashlib import sha256
 from random import Random
+from typing import Literal
 
 from asshole_ai_detector.schemas.case import AITACase
 
 from .deduplication import content_hash
 
-# Minimum available cases for EVAL-01's 40/40/40/40/20 consensus quotas.
-# Increase these margins if the team needs extra candidates for manual review.
+SplitStrategy = Literal["provider_test", "combined_stratified"]
+
 DEFAULT_GOLDEN_MINIMUMS: dict[str, int] = {
     "NTA": 40,
     "YTA": 40,
@@ -27,10 +32,9 @@ DEFAULT_GOLDEN_MINIMUMS: dict[str, int] = {
 
 @dataclass(frozen=True)
 class SplitManifest:
-    """Contract consumed by EVAL-01/golden_validation.py.
+    """Partition inventories and leakage-scan evidence for EVAL-01.
 
-    None = scan not yet verified; () = verified, with zero duplicate groups.
-    Group IDs must refer to *retained* partition members, never removed IDs.
+    None = scan not yet verified; () = verified with zero duplicate groups.
     """
 
     manifest_id: str
@@ -41,6 +45,7 @@ class SplitManifest:
     partition_sizes: tuple[int, ...]
     exact_groups: tuple[frozenset[str], ...] | None
     semantic_groups: tuple[frozenset[str], ...] | None
+    strategy: SplitStrategy = "provider_test"
 
 
 @dataclass(frozen=True)
@@ -61,15 +66,25 @@ class SplitResult:
         return self.retrieval
 
 
+def _validate_minimums(minimums: Mapping[str, int], name: str, size: int) -> None:
+    if any(
+        label not in DEFAULT_GOLDEN_MINIMUMS
+        or type(count) is not int
+        or count < 0
+        for label, count in minimums.items()
+    ):
+        raise ValueError(f"Invalid {name} minimum label/count")
+    if sum(minimums.values()) > size:
+        raise ValueError(f"{name} minimum quotas exceed partition size")
+
+
 def _pick_golden(
     test_cases: list[AITACase],
     count: int,
     minimums: Mapping[str, int],
     rng: Random,
 ) -> list[AITACase]:
-    if sum(minimums.values()) > count:
-        raise ValueError("Golden minimum quotas exceed the held-out pool size")
-
+    """Keep the original provider-test sampler for backwards compatibility."""
     buckets: dict[str, list[AITACase]] = {}
     for case in test_cases:
         buckets.setdefault(case.derived_fields.consensus_label, []).append(case)
@@ -96,6 +111,57 @@ def _pick_golden(
     return sorted(selected, key=lambda case: case.post_id)
 
 
+def _allocate_with_minimums(
+    eligible: list[AITACase],
+    *,
+    golden_size: int,
+    development_size: int,
+    golden_minimums: Mapping[str, int],
+    development_minimums: Mapping[str, int],
+    rng: Random,
+) -> tuple[list[AITACase], list[AITACase], list[AITACase]]:
+    """Reserve BOTH partitions' rare classes before filling remaining slots.
+
+    This is deterministic for the same source records, revision, quotas and seed;
+    it does not artificially duplicate or resample any post.
+    """
+    buckets: dict[str, list[AITACase]] = {}
+    for case in eligible:
+        buckets.setdefault(case.derived_fields.consensus_label, []).append(case)
+
+    held_out: list[AITACase] = []
+    development: list[AITACase] = []
+    for label in sorted(set(golden_minimums) | set(development_minimums)):
+        n_gold = golden_minimums.get(label, 0)
+        n_dev = development_minimums.get(label, 0)
+        available = sorted(buckets.get(label, []), key=lambda c: c.post_id)
+        if n_gold + n_dev > len(available):
+            raise ValueError(
+                f"Not enough {label} cases: need {n_gold} Golden + "
+                f"{n_dev} development, have {len(available)}"
+            )
+        rng.shuffle(available)
+        held_out.extend(available[:n_gold])
+        development.extend(available[n_gold : n_gold + n_dev])
+
+    reserved_ids = {case.post_id for case in (*held_out, *development)}
+    remaining = sorted(
+        (case for case in eligible if case.post_id not in reserved_ids),
+        key=lambda c: c.post_id,
+    )
+    rng.shuffle(remaining)
+    gold_fill = golden_size - len(held_out)
+    dev_fill = development_size - len(development)
+    held_out.extend(remaining[:gold_fill])
+    development.extend(remaining[gold_fill : gold_fill + dev_fill])
+    unused = remaining[gold_fill + dev_fill :]
+    return (
+        sorted(held_out, key=lambda c: c.post_id),
+        sorted(development, key=lambda c: c.post_id),
+        sorted(unused, key=lambda c: c.post_id),
+    )
+
+
 def _ensure_exactly_unique(cases: list[AITACase]) -> None:
     ids = [case.post_id for case in cases]
     if len(ids) != len(set(ids)):
@@ -110,14 +176,18 @@ def _manifest_id(
     *,
     source_revision: str,
     seed: int,
-    minimums: Mapping[str, int],
+    strategy: SplitStrategy,
+    golden_minimums: Mapping[str, int],
+    development_minimums: Mapping[str, int],
 ) -> str:
-    """Bind manifest ID to the source, exact contents and split assignments."""
+    """Bind ID to provenance, partition contents, policy and both quota sets."""
     snapshot = {
-        "schema_version": 1,
+        "schema_version": 2,
         "source_revision": source_revision,
         "seed": seed,
-        "minimums": dict(sorted(minimums.items())),
+        "strategy": strategy,
+        "golden_minimums": dict(sorted(golden_minimums.items())),
+        "development_minimums": dict(sorted(development_minimums.items())),
         "partitions": {
             name: [
                 (case.post_id, sha256(case.model_dump_json().encode("utf-8")).hexdigest())
@@ -139,12 +209,15 @@ def split_cases(
     development_size: int = 500,
     seed: int = 42,
     golden_minimums: Mapping[str, int] | None = None,
+    development_minimums: Mapping[str, int] | None = None,
+    strategy: SplitStrategy = "provider_test",
 ) -> SplitResult:
-    """Split deduplicated cases while preserving provider train/test roles.
+    """Split cases; EVAL-01 separately selects the final 200 Golden candidates.
 
-    `test_ids` are original provider *test* post IDs. Other IDs become RAG
-    candidates. Golden and development are sampled solely from provider test.
-    Golden *final* category selection is delegated to EVAL-01.
+    ``test_ids`` identifies original eligible HF test cases. The combined policy
+    can sample from both HF partitions; original test IDs remain useful for
+    provenance and compatibility. ``unused_test`` is empty for combined policy:
+    every other eligible case becomes retrieval-eligible.
     """
     if not source_revision or not source_revision.strip():
         raise ValueError("Provide a pinned, nonempty dataset source_revision")
@@ -154,86 +227,99 @@ def split_cases(
         raise ValueError("golden_size must be a nonnegative integer")
     if type(development_size) is not int or development_size < 0:
         raise ValueError("development_size must be a nonnegative integer")
-    minimums = (
-        dict(DEFAULT_GOLDEN_MINIMUMS)
-        if golden_minimums is None
-        else dict(golden_minimums)
-    )
-    if any(
-        label not in DEFAULT_GOLDEN_MINIMUMS
-        or type(count) is not int
-        or count < 0
-        for label, count in minimums.items()
-    ):
-        raise ValueError("Invalid Golden minimum label/count")
+    if strategy not in ("provider_test", "combined_stratified"):
+        raise ValueError(f"Unknown split strategy: {strategy!r}")
+
+    gold_mins = dict(DEFAULT_GOLDEN_MINIMUMS if golden_minimums is None else golden_minimums)
+    dev_mins = dict(development_minimums or {})
+    _validate_minimums(gold_mins, "Golden", golden_size)
+    _validate_minimums(dev_mins, "Development", development_size)
 
     unique_cases = sorted(cases, key=lambda case: case.post_id)
     _ensure_exactly_unique(unique_cases)
     test_id_set = set(test_ids)
     test_cases = [case for case in unique_cases if case.post_id in test_id_set]
     train_cases = [case for case in unique_cases if case.post_id not in test_id_set]
-    if golden_size + development_size > len(test_cases):
+    eligible = test_cases if strategy == "provider_test" else unique_cases
+    if golden_size + development_size > len(eligible):
         raise ValueError(
             f"Need {golden_size + development_size} held-out/development cases, "
-            f"but only {len(test_cases)} eligible provider-test cases exist"
+            f"but only {len(eligible)} eligible cases exist"
         )
 
     rng = Random(seed)
-    held_out = _pick_golden(test_cases, golden_size, minimums, rng)
-    held_ids = {case.post_id for case in held_out}
-    remaining = [case for case in test_cases if case.post_id not in held_ids]
-    rng.shuffle(remaining)
-    dev_ids = {case.post_id for case in remaining[:development_size]}
-    development = sorted(
-        (case for case in remaining if case.post_id in dev_ids),
-        key=lambda case: case.post_id,
-    )
-    unused_test = sorted(
-        (case for case in remaining if case.post_id not in dev_ids),
-        key=lambda case: case.post_id,
-    )
+    if strategy == "provider_test" and not dev_mins:
+        # Original behavior for existing callers and historical tests.
+        held_out = _pick_golden(test_cases, golden_size, gold_mins, rng)
+        held_ids = {case.post_id for case in held_out}
+        remaining = [case for case in test_cases if case.post_id not in held_ids]
+        rng.shuffle(remaining)
+        dev_ids = {case.post_id for case in remaining[:development_size]}
+        development = sorted(
+            (case for case in remaining if case.post_id in dev_ids),
+            key=lambda c: c.post_id,
+        )
+        unused_test = sorted(
+            (case for case in remaining if case.post_id not in dev_ids),
+            key=lambda c: c.post_id,
+        )
+        retrieval = train_cases
+    else:
+        held_out, development, leftover = _allocate_with_minimums(
+            eligible,
+            golden_size=golden_size,
+            development_size=development_size,
+            golden_minimums=gold_mins,
+            development_minimums=dev_mins,
+            rng=rng,
+        )
+        if strategy == "combined_stratified":
+            retrieval = leftover
+            unused_test = []
+        else:
+            retrieval = train_cases
+            unused_test = leftover
 
-    inventories = (
-        frozenset(held_ids),
-        frozenset(dev_ids),
-        frozenset(case.post_id for case in train_cases),
-    )
-    assert not (inventories[0] & inventories[1])
-    assert not (inventories[0] & inventories[2])
-    assert not (inventories[1] & inventories[2])
+    held_ids = frozenset(c.post_id for c in held_out)
+    dev_ids = frozenset(c.post_id for c in development)
+    retrieval_ids = frozenset(c.post_id for c in retrieval)
+    inventories = (held_ids, dev_ids, retrieval_ids)
+    if any(inventories[i] & inventories[j] for i, j in ((0, 1), (0, 2), (1, 2))):
+        raise ValueError("Cross-partition post-ID overlap")
+    if len(held_out) != golden_size or len(development) != development_size:
+        raise ValueError("Partition allocation did not meet requested sizes")
+
     manifest = SplitManifest(
         manifest_id=_manifest_id(
             {
                 "held_out": held_out,
                 "development": development,
-                "retrieval": train_cases,
+                "retrieval": retrieval,
                 "unused_test": unused_test,
             },
             source_revision=source_revision,
             seed=seed,
-            minimums=minimums,
+            strategy=strategy,
+            golden_minimums=gold_mins,
+            development_minimums=dev_mins,
         ),
         source_revision=source_revision,
-        held_out_ids=inventories[0],
-        development_ids=inventories[1],
-        retrieval_ids=inventories[2],
+        held_out_ids=held_ids,
+        development_ids=dev_ids,
+        retrieval_ids=retrieval_ids,
         partition_sizes=tuple(map(len, inventories)),
-        exact_groups=(),  # All retained cases were explicitly checked above.
-        semantic_groups=None,  # NOT scanned yet; never pretend this equals ().
+        exact_groups=(),
+        semantic_groups=None,  # NOT scanned yet; RAG-04 owns the semantic scan.
+        strategy=strategy,
     )
-    return SplitResult(held_out, development, train_cases, unused_test, manifest, seed)
+    return SplitResult(held_out, development, retrieval, unused_test, manifest, seed)
 
 
 def attach_semantic_scan(
     manifest: SplitManifest,
     groups: Iterable[Collection[str]],
 ) -> SplitManifest:
-    """Attach VERIFIED near-duplicate scan results, after embeddings exist.
-
-    Only call after actually scanning the *entire* retained dataset for
-    near duplicates. Detected cross-partition groups remain visible for
-    EVAL-01 validation to reject; they must be resolved before final use.
-    """
+    """Attach VERIFIED scan results only after scanning retained partitions."""
     universe = (
         manifest.held_out_ids | manifest.development_ids | manifest.retrieval_ids
     )
